@@ -132,7 +132,7 @@ def build_failure_report(exc: Exception) -> dict[str, Any]:
 def run_ranking_preflight() -> dict[str, Any]:
     started = datetime.now(timezone.utc)
     report: dict[str, Any] = {
-        "report_version": 4,
+        "report_version": 5,
         "project": "binance_stocks_vs_crypto",
         "run_at_utc": started.isoformat().replace("+00:00", "Z"),
         "runner": {
@@ -357,10 +357,6 @@ def render_markdown(report: dict[str, Any]) -> str:
         "| Missing/invalid rows | " + str(coverage.get("missing_or_invalid_ticker_count")) + " |",
         "| Coverage % | " + str(coverage.get("coverage_pct")) + " |",
         "",
-        "## Gates",
-        "",
-        "| Gate | Status |",
-        "|---|---|",
     ]
     failure = report.get("failure")
     if failure:
@@ -371,7 +367,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "- Failed stage: " + str(failure.get("stage")),
             "- Exception: " + str(failure.get("exception_type")),
             "- HTTP status: " + str(failure.get("http_status")),
-            "- Message: " + str(failure.get("message", "")).replace("|", "/").replace("\\n", " "),
+            "- Message: " + str(failure.get("message", "")).replace("|", "/").replace("\n", " "),
             "- Diagnosis: " + str(failure.get("diagnosis", "")),
             "- Recommended action: " + str(failure.get("recommended_action", "")),
             "- Paper accounting attempted: " + str(failure.get("paper_accounting_attempted")),
