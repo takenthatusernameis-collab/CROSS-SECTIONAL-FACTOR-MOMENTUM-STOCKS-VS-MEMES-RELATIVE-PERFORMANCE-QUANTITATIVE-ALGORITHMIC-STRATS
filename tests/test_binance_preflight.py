@@ -73,7 +73,8 @@ class ResponseSchemaTests(unittest.TestCase):
         self.assertEqual(result["last_funding_rate"], "0.0001")
 
     def test_premium_index_summary_rejects_missing_fields(self):
-        self.assertFalse(summarise_premium_index({"symbol": "1000PEPEUSDT"}))
+        result = summarise_premium_index({"symbol": "1000PEPEUSDT"})
+        self.assertFalse(result["schema_valid"])
 
 
 if __name__ == "__main__":
