@@ -22,7 +22,7 @@ from typing import Any
 BASE_URL = "https://external-api.kalshi.com/trade-api/v2/margin/"
 USER_AGENT = "kalshi-stocks-vs-crypto-read-only-preflight/0.1"
 MAX_BYTES = 16 * 1024 * 1024
-MAX_SAMPLES = 3
+MAX_SAMPLES = 5
 RETRYABLE = {429, 500, 502, 503, 504}
 
 
@@ -167,6 +167,12 @@ def choose_sample_markets(markets: list[dict[str, Any]], limit: int = MAX_SAMPLE
             if len(chosen) >= limit:
                 break
     return chosen
+
+
+def schedule_query_params(markets: list[dict[str, Any]]) -> dict[str, str] | None:
+    """The schedule endpoint requires 1-100 comma-separated market tickers."""
+    tickers = [m["ticker"] for m in markets if isinstance(m.get("ticker"), str) and m["ticker"]]
+    return {"tickers": ",".join(tickers)} if tickers else None
 
 
 def summarise_candlesticks(payload: dict[str, Any]) -> dict[str, Any]:
@@ -315,7 +321,8 @@ def run_preflight() -> dict[str, Any]:
                                             "status": "SKIPPED", "reason": "No sample ticker available"})
 
     for name, path in (("market_holiday_schedules", "markets/schedules"), ("corporate_actions", "corporate_actions")):
-        result = call(name, path)
+        params = schedule_query_params(sample) if name == "market_holiday_schedules" else None
+        result = call(name, path, params)
         data = result.pop("payload")
         result["payload_summary"] = {"top_level_keys": keys(data),
           "top_level_item_count": sum(len(v) for v in data.values() if isinstance(v, (list, dict))) if isinstance(data, dict) else None,
@@ -370,7 +377,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append("")
     lines.extend(["## Interpretation", "",
       "A successful API preflight does not prove the full universe is classifiable, liquid, or eligible. It does not authorize ranking, position creation, or subsequent implementation. A failure describes this runner and time only.",
-      "", "The market-schedules REST endpoint covers holiday closures; regular daily/weekend sessions come from each market's schedule metadata.", ""])
+      "", "The market-schedules REST endpoint requires a comma-separated tickers query and covers holiday closures; regular daily/weekend sessions come from each market's schedule metadata.", ""])
     return "\n".join(lines)
 
 

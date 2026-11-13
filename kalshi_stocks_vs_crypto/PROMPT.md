@@ -51,7 +51,7 @@ Report relative price-ratio performance separately from paper portfolio P&L. Acc
 
 ## Stage-gated implementation
 
-1. Read-only production API preflight on GitHub-hosted Ubuntu.
+1. Read-only production API preflight on GitHub-hosted Ubuntu, including holiday schedules with the required tickers query parameter.
 2. Validate exact Stocks/ETF/Index/Crypto classification.
 3. Validate timestamped 24-hour ranking data.
 4. Implement contract economics, fills, costs, funding, and margin modelling.

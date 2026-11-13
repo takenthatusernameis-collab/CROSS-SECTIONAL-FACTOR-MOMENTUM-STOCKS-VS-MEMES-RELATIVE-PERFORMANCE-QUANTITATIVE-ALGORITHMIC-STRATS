@@ -18,7 +18,7 @@ It checks:
 - GET /markets/{ticker}/orderbook
 - GET /funding_rates/estimate?ticker=...
 - GET /funding_rates/historical?ticker=...
-- GET /markets/schedules
+- GET /markets/schedules?tickers=... (required; sends a small representative ticker sample)
 - GET /corporate_actions
 
 The requests are based on Kalshi's official Perps REST documentation. They contain no authentication headers and do not access private account, order, or trading endpoints.
@@ -27,7 +27,7 @@ The requests are based on Kalshi's official Perps REST documentation. They conta
 
 - The active market list exposes raw asset_class values and product_metadata; the program intentionally does not infer individual stocks, ETFs, indices, or crypto membership from ticker/title strings.
 - Classification is a hard blocker until actual API metadata has been reviewed and shown to separate individual common stocks from ETFs and equity indices.
-- The market-schedules endpoint reports holiday closures only. Regular daily/weekend sessions must use each market's schedule data.
+- The market-schedules endpoint requires a comma-separated list of 1–100 tickers and reports holiday closures only. Regular daily/weekend sessions must use each market's schedule data.
 - One-minute candles are sampled for endpoint/schema availability and data quality; this preflight does not calculate ranking returns.
 - A successful endpoint call does not prove the full universe is classifiable, tradable, or liquid enough for the strategy.
 - Perps production API access is documented as a member-by-member rollout. A GitHub runner result is evidence only for that environment and time.

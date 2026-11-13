@@ -5,6 +5,7 @@ from kalshi_stocks_vs_crypto.preflight import (
     choose_sample_markets,
     summarise_candlesticks,
     summarise_orderbook,
+    schedule_query_params,
 )
 
 
@@ -45,6 +46,13 @@ class MarketSchemaTests(unittest.TestCase):
 
 
 class ResponseSummaryTests(unittest.TestCase):
+    def test_schedule_query_requires_and_joins_tickers(self):
+        self.assertEqual(
+            schedule_query_params([{"ticker": "ABC"}, {"ticker": "XYZ"}]),
+            {"tickers": "ABC,XYZ"},
+        )
+        self.assertIsNone(schedule_query_params([]))
+
     def test_candlestick_summary_counts_null_and_valid_trade_closes(self):
         payload = {
             "ticker": "ABC",
