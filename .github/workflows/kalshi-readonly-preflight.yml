@@ -32,6 +32,9 @@ jobs:
       - name: Run deterministic preflight unit tests
         run: python -m unittest discover -s tests -p 'test_kalshi_preflight.py' -v
 
+      - name: Run ranking and session-gate unit tests
+        run: python -m unittest discover -s tests -p 'test_kalshi_rankings.py' -v
+
       - name: Compile preflight package
         run: python -m compileall -q kalshi_stocks_vs_crypto tests/test_kalshi_preflight.py
 
