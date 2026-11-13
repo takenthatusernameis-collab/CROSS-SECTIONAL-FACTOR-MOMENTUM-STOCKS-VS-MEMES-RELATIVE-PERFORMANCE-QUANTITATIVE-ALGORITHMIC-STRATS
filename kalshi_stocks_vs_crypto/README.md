@@ -16,6 +16,12 @@ Run:
 
 Completed successfully on GitHub-hosted Ubuntu in workflow run #3. The API returned 86 active markets: 58 Equities, 2 Indices, 19 Crypto, 6 Metals, and 1 Energy. Sample market detail, order books, one-minute candles, funding estimate/history, holiday schedules, and corporate actions returned HTTP 200. The nine Stage 1 tests and compilation passed.
 
+## Equities-session-gated ranking diagnostic
+
+Before requesting any candles, the workflow checks the native schedule metadata for all active markets in the Equities class. It proceeds only when every one reports `schedule.is_open=true`; otherwise it records a skip and performs no ranking candle requests.
+
+A one-time rerun is scheduled for **2026-11-15 23:05 UTC** (2026-11-16 01:05 Europe/Bucharest), five minutes after the latest API-reported opening. It has a date guard so the annual cron does not execute in later years. The live `is_open` check remains authoritative.
+
 ## Stage 2: full-universe ranking diagnostic
 
 Run:

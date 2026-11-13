@@ -33,6 +33,34 @@ def schedule_summary(market: dict[str, Any]) -> dict[str, Any]:
             "next_close_ts": schedule.get("next_close_ts")}
 
 
+
+def equities_session_status(markets: list[dict[str, Any]]) -> dict[str, Any]:
+    """Open only when every active market in the Equities class reports open."""
+    equities = [m for m in markets if m.get("asset_class") == "Equities"]
+    open_markets = [m for m in equities if schedule_summary(m)["is_open"] is True]
+    closed_markets = [m for m in equities if schedule_summary(m)["is_open"] is False]
+    unknown_markets = [m for m in equities if schedule_summary(m)["is_open"] not in (True, False)]
+    next_open_values = sorted({
+        int(s["next_open_ts"])
+        for m in equities
+        for s in [schedule_summary(m)]
+        if isinstance(s["next_open_ts"], (int, float)) and not isinstance(s["next_open_ts"], bool)
+    })
+    return {
+        "session_open": bool(equities) and len(open_markets) == len(equities),
+        "rule": "all active markets with asset_class=Equities must report schedule.is_open=true",
+        "equities_market_count": len(equities),
+        "open_count": len(open_markets),
+        "closed_count": len(closed_markets),
+        "unknown_schedule_count": len(unknown_markets),
+        "next_open_ts_values": next_open_values,
+        "next_open_timestamps_utc": [
+            datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
+            for ts in next_open_values
+        ],
+    }
+
+
 def fetch_market_candles(market: dict[str, Any], as_of_ts: int) -> dict[str, Any]:
     ticker = str(market["ticker"])
     encoded = urllib.parse.quote(ticker, safe="")
@@ -75,7 +103,7 @@ def run_ranking_preflight(max_workers: int = 2) -> dict[str, Any]:
             "note": "Equities and Indices are deliberately combined. ETFs remain included if Kalshi classifies them as Equities. No ticker/title inference.",
             "long_notional": "1x NAV", "short_notional": "1x NAV",
             "gross_exposure": "2x NAV", "paper_positions_created": False},
-        "market_list": {}, "coverage": {}, "provisional_leaders": {},
+        "market_list": {}, "equities_session": {}, "coverage": {}, "provisional_leaders": {},
         "market_results": [], "gates": {},
         "safety_assertions": {"public_get_only": True, "no_credentials": True,
             "no_private_account_endpoints": True, "no_order_endpoints": True,
@@ -125,6 +153,22 @@ def run_ranking_preflight(max_workers: int = 2) -> dict[str, Any]:
         "ranking_request_count": len(all_targets), "all_unique_tickers": True,
     }
 
+    equities_status = equities_session_status(markets)
+    report["equities_session"] = equities_status
+    if not equities_status["session_open"]:
+        report["gates"] = {
+            "active_market_discovery": "PASS",
+            "equities_session_open": "CLOSED_OR_UNKNOWN_SKIP",
+            "one_minute_candle_retrieval": "NOT_RUN_SESSION_CLOSED",
+            "complete_fresh_24h_return_coverage": "NOT_RUN",
+            "provisional_leaders_available": "NOT_RUN",
+            "ranking_diagnostic": "SKIPPED_SESSION_CLOSED",
+            "paper_trading": "NOT_IMPLEMENTED",
+            "order_submission": "NOT_PRESENT",
+        }
+        report["skip_reason"] = "Kalshi did not report every active Equities market as open; ranking candles were not requested."
+        return report
+
     results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(fetch_market_candles, market, as_of_ts): market for market in all_targets}
@@ -157,6 +201,7 @@ def run_ranking_preflight(max_workers: int = 2) -> dict[str, Any]:
     }
     report["gates"] = {
         "active_market_discovery": "PASS",
+        "equities_session_open": "PASS",
         "accepted_equity_and_crypto_universe": "PASS" if universes["long"] and universes["short"] else "FAIL",
         "one_minute_candle_retrieval": "PASS" if all(item.get("http_status") == 200 for item in results) and len(results) == total else "FAIL",
         "complete_fresh_24h_return_coverage": "PASS" if complete else "FAIL",
@@ -176,7 +221,15 @@ def render_markdown(report: dict[str, Any]) -> str:
         "- Long: exact raw asset_class Equities or Indices.",
         "- Short: exact raw asset_class Crypto.",
         "- Other classes excluded. ETFs remain included if Kalshi puts them under Equities.",
-        "- No ticker/title inference.", "", "## Universe and coverage", "",
+        "- No ticker/title inference.", "", "## Equities session gate", ""]
+    session = report.get("equities_session", {})
+    lines.append(f"- Reported open: **{session.get('session_open')}**")
+    lines.append(f"- Open/closed/unknown: {session.get('open_count')}/{session.get('closed_count')}/{session.get('unknown_schedule_count')} of {session.get('equities_market_count')}")
+    next_open = session.get("next_open_timestamps_utc") or []
+    lines.append(f"- Next reported open: {', '.join(next_open) if next_open else 'not supplied'}")
+    if report.get("skip_reason"):
+        lines.append(f"- **Skipped:** {report['skip_reason']}")
+    lines.extend(["", "## Universe and coverage", "",
         "| Measure | Count |", "|---|---:|"]
     ml, cov = report.get("market_list", {}), report.get("coverage", {})
     for label, value in [
@@ -229,10 +282,11 @@ def main(argv: list[str] | None = None) -> int:
     (out / "kalshi_ranking_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (out / "kalshi_ranking_report.md").write_text(render_markdown(report), encoding="utf-8")
     summary = {"gates": report["gates"], "coverage": report["coverage"],
+        "equities_session": report.get("equities_session"), "coverage": report.get("coverage"),
         "provisional_leaders": {key: (value.get("ticker"), value.get("return_24h_pct")) if value else None
-            for key, value in report["provisional_leaders"].items() if key.startswith("provisional_")}}
+            for key, value in report.get("provisional_leaders", {}).items() if key.startswith("provisional_")}}
     print(json.dumps(summary, indent=2))
-    return 0 if report["gates"]["ranking_diagnostic"] == "PASS" else 1
+    return 0 if report["gates"]["ranking_diagnostic"] in {"PASS", "SKIPPED_SESSION_CLOSED"} else 1
 
 
 if __name__ == "__main__":

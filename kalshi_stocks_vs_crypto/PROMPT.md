@@ -31,6 +31,10 @@ Use exact asset_class values only. Never infer asset class from ticker, title, s
 
 Kalshi Perps is the only market-data provider. No Bybit, CoinMarketCap, external taxonomy service, secondary exchange, external price feed, or fallback provider.
 
+## Equities session-open gate
+
+Before requesting full-universe candles, inspect `schedule.is_open` on every active market with exact `asset_class=Equities`. Proceed only when every one reports `true`. If any is closed or unknown, write a skip report containing counts and next-open timestamps, and make no ranking candle requests.
+
 ## Ranking data integrity
 
 Calculate:

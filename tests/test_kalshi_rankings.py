@@ -1,6 +1,7 @@
 import unittest
 from decimal import Decimal
 
+from kalshi_stocks_vs_crypto.ranking_preflight import equities_session_status
 from kalshi_stocks_vs_crypto.rankings import (
     build_provisional_leaders,
     calculate_trailing_return,
@@ -57,6 +58,35 @@ class MarketScheduleTests(unittest.TestCase):
             schedule_summary({}),
             {"schedule_available": False, "is_open": None, "next_open_ts": None, "next_close_ts": None},
         )
+
+
+    def test_equities_session_open_requires_every_equities_market_open(self):
+        result = equities_session_status([
+            {"ticker": "EQ1", "asset_class": "Equities", "schedule": {"is_open": True}},
+            {"ticker": "EQ2", "asset_class": "Equities", "schedule": {"is_open": True}},
+            {"ticker": "IDX", "asset_class": "Indices", "schedule": {"is_open": False}},
+            {"ticker": "BTC", "asset_class": "Crypto"},
+        ])
+        self.assertTrue(result["session_open"])
+        self.assertEqual(result["open_count"], 2)
+
+    def test_equities_session_skips_if_any_equities_market_is_closed_or_unknown(self):
+        closed = equities_session_status([
+            {"ticker": "EQ1", "asset_class": "Equities", "schedule": {"is_open": True}},
+            {"ticker": "EQ2", "asset_class": "Equities", "schedule": {"is_open": False}},
+        ])
+        unknown = equities_session_status([
+            {"ticker": "EQ1", "asset_class": "Equities", "schedule": {"is_open": True}},
+            {"ticker": "EQ2", "asset_class": "Equities"},
+        ])
+        self.assertFalse(closed["session_open"])
+        self.assertFalse(unknown["session_open"])
+        self.assertEqual(unknown["unknown_schedule_count"], 1)
+
+    def test_no_equities_markets_never_counts_as_open(self):
+        self.assertFalse(equities_session_status([
+            {"ticker": "BTC", "asset_class": "Crypto"}
+        ])["session_open"])
 
 
 class ReturnCalculationTests(unittest.TestCase):

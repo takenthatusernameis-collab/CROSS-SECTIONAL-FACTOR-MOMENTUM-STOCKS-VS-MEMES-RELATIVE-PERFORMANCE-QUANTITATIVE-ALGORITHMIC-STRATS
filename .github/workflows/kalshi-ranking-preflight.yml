@@ -2,15 +2,8 @@ name: Kalshi Read-only 24h Ranking Diagnostic
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'kalshi_stocks_vs_crypto/rankings.py'
-      - 'kalshi_stocks_vs_crypto/ranking_preflight.py'
-      - 'kalshi_stocks_vs_crypto/README.md'
-      - 'kalshi_stocks_vs_crypto/PROMPT.md'
-      - 'tests/test_kalshi_rankings.py'
-      - '.github/workflows/kalshi-ranking-preflight.yml'
+  schedule:
+    - cron: '5 23 15 11 *'
 
 permissions:
   contents: read
@@ -24,22 +17,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Guard one-time 2026 occurrence
+        id: occurrence
+        if: github.event_name == 'schedule'
+        shell: bash
+        run: |
+          if [ "$(date -u +%F)" = "2026-11-15" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "This annual cron is reserved for the 2026 one-time run; skipping later years."
+          fi
+
       - name: Checkout repository
+        if: steps.occurrence.outputs.enabled != 'false'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.occurrence.outputs.enabled != 'false'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Run ranking unit tests
+        if: steps.occurrence.outputs.enabled != 'false'
         run: python -m unittest discover -s tests -p 'test_kalshi_rankings.py' -v
 
       - name: Compile Kalshi package
+        if: steps.occurrence.outputs.enabled != 'false'
         run: python -m compileall -q kalshi_stocks_vs_crypto tests/test_kalshi_rankings.py
 
       - name: Run full-universe public GET ranking diagnostic
         id: ranking
+        if: steps.occurrence.outputs.enabled != 'false'
         shell: bash
         run: |
           set +e
@@ -49,7 +59,7 @@ jobs:
           exit 0
 
       - name: Upload ranking diagnostic
-        if: always()
+        if: always() && steps.occurrence.outputs.enabled != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: kalshi-ranking-preflight-${{ github.run_id }}
@@ -58,7 +68,7 @@ jobs:
           retention-days: 30
 
       - name: Enforce ranking data-quality gate
-        if: always() && steps.ranking.outcome == 'success'
+        if: always() && steps.occurrence.outputs.enabled != 'false' && steps.ranking.outcome == 'success'
         shell: bash
         run: |
           if [ "${{ steps.ranking.outputs.exit_code }}" != "0" ]; then
