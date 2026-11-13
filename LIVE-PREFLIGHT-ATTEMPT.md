@@ -1,26 +1,37 @@
-# Live Gate category preflight attempt
+# Bybit + CoinMarketCap live preflight attempt
 
-- Attempt date: 2026-11-13 (UTC)
-- Mode: public read-only REST GET; no credentials, testnet, or order placement
-- Contract endpoint: `https://api.gateio.ws/api/v4/futures/usdt/contracts`
-- Ticker endpoint: `https://api.gateio.ws/api/v4/futures/usdt/tickers`
-- Result: **FAIL — inconclusive due to local DNS/network failure**
-- Error: `Temporary failure in name resolution` while resolving `api.gateio.ws`
-- Category values observed from live exchange data: none (no response body received)
-- Eligible Stocks contracts confirmed: not established
-- Eligible Memes contracts confirmed: not established
-- Paper trading authorized: **NO**
+- Attempt: 2026-11-13 05:24:58 UTC
+- Method: public, unauthenticated HTTPS GET; no credentials, no testnet, no orders
+- Bybit: `https://api.bybit.com/v5/market/instruments-info?category=linear`
+- CoinMarketCap: `https://pro-api.coinmarketcap.com/public-api/v1/cryptocurrency/categories`
 
-This failure does not show that Gate lacks either category. It means the current execution environment could not retrieve the exchange feed. The one-shot runner was also attempted and exited with code 1 before opening a paper session. The current runner implementation is wired to block all new paper exposure until a later live preflight returns PASS.
+## Result
 
-Gate's current API documentation describes `contract_type` as a contract classification and gives examples including `stocks`, metals, indices, forex, and commodities. It does not provide a complete enumeration of possible values and does not mention a `meme` value. Gate's Futures Meme Zone announcement confirms that the product category exists, but does not establish the contract metadata string. Therefore, only live contract-feed output can confirm the required pair of categories.
+**FAIL — inconclusive because both hostnames failed DNS resolution in this execution environment.**
 
-## Reproduction
+- Bybit market feed: FAIL; `Temporary failure in name resolution` for `api.bybit.com`.
+- CoinMarketCap taxonomy feed: FAIL; `Temporary failure in name resolution` for `pro-api.coinmarketcap.com`.
+- Contract/category mapping: not established; prerequisite live responses were unavailable.
+- Live Stocks contracts confirmed: none.
+- Live Memes contracts mapped to Bybit: none.
+- `feeds_ready=false`; `paper_trading_authorized=false`; `strategy_ranking_performed=false`.
+- Exit code: 1.
+- No paper positions were opened.
 
-From the project root on a machine with working DNS and HTTPS access:
+These DNS failures do not establish that either service lacks the required categories. They establish only that this terminal could not reach either host. A fresh successful `svm-paper preflight` on a machine with working DNS and HTTPS is required before the next scheduled UTC-open handler can open a new paper session. Manual preflight is diagnostic only and does not authorize an entry.
 
-```bash
-svm-paper preflight
-```
+## Daily logic implemented
 
-Exit code 0 and JSON `"passed": true` are required before starting a new paper session. Exit code 1 keeps paper trading blocked.
+At UTC 00:00 only, the workflow finalizes the preceding session and constructs its completed ratio candle. Daily ratio ROI uses candle close/open; daily ratio drawdown uses low/open. It then calculates cumulative ratio drawdown against the historical high-water mark, records actual account ROI separately after VWAP/fees/funding, and only then fetches a fresh universe and considers the next daily pair.
+
+The active-day scheduler sleeps until the next UTC boundary and does not poll rankings, compute performance or adjust simulated positions. Manual invocations outside the UTC-open grace window do not call market endpoints or alter state.
+
+## Local validation
+
+- 29/29 deterministic unit/integration tests passed.
+- Python compile checks passed.
+- Editable package install and CLI invocation passed.
+- Intraday invocation returned "waiting for next UTC daily open" without a market call or position action.
+- Local paper status: no sessions recorded.
+
+Mocked test fixtures validate program logic, not live category support or profitability.

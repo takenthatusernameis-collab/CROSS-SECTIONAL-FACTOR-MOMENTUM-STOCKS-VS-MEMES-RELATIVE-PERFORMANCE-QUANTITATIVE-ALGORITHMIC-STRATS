@@ -1,0 +1,21 @@
+{
+  "exchange": "bybit",
+  "market_category": "linear",
+  "quote_coin": "USDT",
+  "settle_coin": "USDT",
+  "stock_symbol_type": "stock",
+  "classification_provider": "coinmarketcap_keyless_public_api",
+  "cmc_meme_category_name": "Memes",
+  "gross_leverage": 2,
+  "initial_equity_usdt": 10000,
+  "taker_fee_rate": 0.00055,
+  "orderbook_levels": 100,
+  "entry_grace_seconds": 45,
+  "minimum_mark_coverage": 1,
+  "request_timeout_seconds": 20,
+  "max_retries": 2,
+  "bybit_base_url": "https://api.bybit.com",
+  "cmc_base_url": "https://pro-api.coinmarketcap.com/public-api",
+  "data_dir": "data",
+  "reports_dir": "reports"
+}

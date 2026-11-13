@@ -1,45 +1,42 @@
 # Stocks vs Memes — Daily Perpetual Paper Trader
 
-A local, credential-free, **paper-only** simulation of a daily market-neutral Gate.io USDT perpetual pair:
+Credential-free, local, paper-only simulation of a daily market-neutral pair using **Bybit public market data + CoinMarketCap's keyless public category taxonomy**.
 
-- At each UTC day open, long the highest trailing-24h gainer among contracts whose exchange metadata classifies them as Stocks.
-- Short the lowest trailing-24h performer among contracts whose metadata classifies them as Memes.
-- Hold both legs until the UTC daily candle closes.
-- Default sizing is 2.0x total gross exposure: 1x NAV long plus 1x NAV short, equal USDT notional.
+- Long the highest 24-hour gainer among Bybit's native stock perpetuals.
+- Short the lowest 24-hour performer among Bybit USDT linear perpetuals uniquely mapped into CoinMarketCap's exact **Memes** category.
+- Equal USDT notional legs. Default gross leverage is 2.0x total: 1x NAV long and 1x NAV short.
+- Hold each pair for one UTC daily candle. No intraday re-ranking, rebalancing, performance computation, or discretionary position change.
 
-## Mandatory live preflight — do this first
+## Important: live source check
 
-Run:
+Run `svm-paper preflight` on a network with working DNS and HTTPS. It independently checks Bybit and CoinMarketCap, then verifies the stock and meme contracts map to current Bybit tickers. A PASS proves the data sources are ready but does **not** authorize or execute a trade. Only the scheduled UTC daily-open handler can rank and open a simulated session.
 
-```bash
-svm-paper preflight
-```
+**Latest recorded live attempt (2026-11-13 05:24:58 UTC): FAIL / inconclusive.** DNS resolution failed independently for `api.bybit.com` and `pro-api.coinmarketcap.com`; no live category data was received. This is not evidence either provider lacks the categories. `feeds_ready=false`, `paper_trading_authorized=false`, `strategy_ranking_performed=false`. No positions were opened. See [LIVE-PREFLIGHT-ATTEMPT.md](LIVE-PREFLIGHT-ATTEMPT.md).
 
-Exit code 0 is required. The command fetches current public Gate contract metadata and ticker data, confirms at least one active direct USDT contract in both categories with a matching valid 24-hour ticker, records all observed `contract_type` values, saves `data/live_preflight_latest.json`, and returns exit code 1 on any failure.
+## Exact daily timing and ratio metrics
 
-Both `svm-paper run` and `svm-paper run --loop` enforce this gate before opening any new paper exposure. The daily entry path independently revalidates the category universe. Mock tests and documentation do not authorize trading. An already-open persisted paper session can resume to monitor or close after restart, but this exception cannot open new positions.
+At UTC 00:00 only, the workflow:
+1. Finalizes the prior day's paper session.
+2. Builds the completed ratio candle from synchronized one-minute Bybit mark candles for the pair that was held during that prior UTC day.
+3. Calculates prior-day ratio ROI from the ratio candle's **close/open**, and daily adverse excursion/drawdown from its **low/open**.
+4. Calculates cumulative ratio index and historical maximum drawdown using the daily low against the running high-water mark.
+5. Fetches and validates fresh Bybit/CMC universes, ranks the two categories, and opens the next paper session if all source and execution conditions pass.
 
-## Current live test result (13 November 2026)
+The ratio is `long_mark / short_mark`. Ratio daily ROI is `(ratio_close / ratio_open - 1) * 100`; daily ratio drawdown is `min(0, ratio_low / ratio_open - 1) * 100`. Ratio statistics are not leveraged account ROI. A separate portfolio ROI is calculated from both position legs' entry/exit VWAPs, fees and funding.
 
-**FAIL — inconclusive due to local DNS/network failure.** The terminal could not resolve `api.gateio.ws` while requesting the public contract endpoint. No live response body or category values were received, so neither Stocks nor Memes support was confirmed. The one-shot `svm-paper run` was also executed and exited with code 1 before opening a session. Paper trading is therefore blocked. See [LIVE-PREFLIGHT-ATTEMPT.md](LIVE-PREFLIGHT-ATTEMPT.md).
+Ratio high/low use conservative one-minute bounds: long-high / short-low, and long-low / short-high. They are **not exact tick-synchronous spread extrema** and can overstate intraminute range. A completed daily candle requires exactly 1,440 synchronized minutes with its first and final minute; the next day's midnight bar is excluded. Cumulative MDD assumes daily high precedes the low because OHLC does not expose tick ordering.
 
-This failure does not mean that Gate lacks the category; it means this execution environment could not reach the feed. Retry `svm-paper preflight` from a machine with working DNS and HTTPS access. Only a fresh PASS permits new paper sessions.
+The continuous runner sleeps until the next UTC daily open. A manual preflight is diagnostic only. A one-shot run outside the entry grace window returns without market-data calls. Incomplete data, ambiguous CoinMarketCap mappings, missing categories or insufficient execution depth fail closed.
 
-## Category rules
+## Sources
 
-Use native `contract_type` metadata only. No symbol-name guessing or alternative-category substitution. Only conservative exact aliases `stock`/`stocks` and `meme`/`memes` are enabled by default in `config/strategy.json`. Do not add aliases unless a live exchange response or authoritative Gate documentation confirms the exact value.
+- Bybit V5 [linear instrument metadata](https://bybit-exchange.github.io/docs/v5/market/instrument) and [tickers](https://bybit-exchange.github.io/docs/v5/market/tickers).
+- Bybit V5 [order book](https://bybit-exchange.github.io/docs/v5/market/orderbook), [mark-price kline](https://bybit-exchange.github.io/docs/v5/market/mark-kline), and [funding history](https://bybit-exchange.github.io/docs/v5/market/history-fund-rate).
+- CoinMarketCap [public API documentation](https://coinmarketcap.com/api/documentation/v1/), keyless public prefix `/public-api`, [Categories](https://pro-api.coinmarketcap.com/public-api/v1/cryptocurrency/categories), [Category details](https://pro-api.coinmarketcap.com/public-api/v1/cryptocurrency/category), and [ID map](https://pro-api.coinmarketcap.com/public-api/v1/cryptocurrency/map).
 
-Gate's current API documentation defines `contract_type` as a contract classification and gives examples including `stocks`, metals, indices, forex, and commodities, but does not enumerate Meme values. Gate's official Futures Meme Zone announcement proves that the product category exists, not which `contract_type` string the public API returns.
+Bybit `symbolType=stock` defines the stock universe. CoinMarketCap supplies the exact Memes category only. All rankings, executable market prices and fills come from Bybit. CMC symbols are matched to Bybit `baseCoin` only when the active CMC ID map gives exactly one ID and that ID belongs to the Memes category. Ambiguous symbols are excluded.
 
-## Simulation details
-
-Uses public GET market-data endpoints only. No API keys, secrets, private account endpoints, testnet, paid services, or real order placement. Simulates book-depth VWAP fills, taker fees, funding settlements, spread/market-impact slippage, minute mark-to-market equity, normalized ratio drift, ROI, and maximum drawdown. Execution costs are embedded in fill prices and are not deducted twice.
-
-SQLite state is local. Daily reports are exported to JSON, CSV, Markdown, and SVG. Drawdown uses one-minute mark candles plus entry/exit points and does not capture intraminute extremes.
-
-## Install and run
-
-Download and extract the workflow ZIP supplied with this conversation, then:
+## Install
 
 ```bash
 python -m venv .venv
@@ -50,14 +47,16 @@ svm-paper preflight
 svm-paper run --loop
 ```
 
-Other commands: `svm-paper universe` (same strict live check), `svm-paper status`, and `svm-paper report --date YYYY-MM-DD`.
+No API keys, secrets, private account endpoints, testnet, paid feeds, or real orders.
 
-## Validation
+Commands: `svm-paper preflight`, `svm-paper universe`, `svm-paper run`, `svm-paper run --loop`, `svm-paper status`, `svm-paper report --date YYYY-MM-DD`.
 
-The current local build passes 20 unit/integration tests and Python compile checks. Tests include mocked positive and negative feed cases, explicit runner blocking when either category is missing, network-error blocking, and a complete fixture-based daily session. Mock fixture performance is not live exchange performance and does not satisfy the live preflight.
+SQLite state is saved locally under `data/`; completed reports are exported to JSON, CSV, Markdown and SVG under `reports/`.
 
-## Official Gate references
+## Simulation costs and risk
 
-- [Gate API v4 access URLs](https://www.gate.com/docs/developers/apiv4/en/)
-- [USDT Futures contract endpoint and `contract_type` schema](https://www.gate.com/docs/developers/apiv4/en/futures/)
-- [Gate Futures Meme Zone announcement, 9 November 2026](https://www.gate.com/announcements/article/102676)
+Entry/exit are simulated by sweeping public order-book depth for VWAP. Incomplete depth is rejected. Taker fees default to 0.055% per side as a configurable standard-rate assumption, not an account-specific fee quote. Funding is applied at every observed settlement with correct long/short cashflow signs. Slippage is measured versus mid-price for diagnostics and is already embedded in VWAP; it is never deducted twice. Market-data completeness and exit delay are included in each report.
+
+## Tests
+
+`python -m unittest discover -s tests -v` currently passes **29 deterministic unit/integration tests**. `python -m compileall -q stocks_vs_memes tests` passes. Tests use fake market responses and prove code behavior only; they are not live source confirmation or evidence of strategy profitability.
