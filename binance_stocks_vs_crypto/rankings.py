@@ -1,12 +1,9 @@
-"""Universe classification and return-quality rules for Binance perpetuals."""
+"""Universe classification and Binance-reported 24-hour ticker ranking rules."""
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from typing import Any
-import math
 
-# Exact Binance exchangeInfo underlyingType values. Commodity/FX/unknown classes
-# are deliberately excluded; ticker/title text is never used to infer a class.
 LONG_UNDERLYING_TYPES = frozenset({
     "EQUITY", "CN_EQUITY", "KR_EQUITY", "HK_EQUITY", "PREMARKET", "INDEX",
 })
@@ -14,10 +11,7 @@ SHORT_UNDERLYING_TYPES = frozenset({"COIN"})
 LONG_CONTRACT_TYPE = "TRADIFI_PERPETUAL"
 SHORT_CONTRACT_TYPE = "PERPETUAL"
 QUOTE_ASSET = "USDT"
-MAX_PRICE_AGE_SECONDS = 900
-REFERENCE_TOLERANCE_SECONDS = 900
-LOOKBACK_MILLISECONDS = 24 * 60 * 60 * 1000
-ONE_MINUTE_MILLISECONDS = 60_000
+MAX_TICKER_WINDOW_AGE_SECONDS = 900
 
 
 def classify_binance_universe(symbols: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -60,102 +54,107 @@ def classify_binance_universe(symbols: list[dict[str, Any]]) -> dict[str, list[d
     return {"long": long_contracts, "short": short_contracts, "excluded": excluded}
 
 
-def _valid_price(value: Any) -> Decimal | None:
+def _decimal(value: Any) -> Decimal | None:
     if value is None or isinstance(value, bool):
         return None
     try:
-        price = Decimal(str(value))
+        number = Decimal(str(value))
     except (InvalidOperation, ValueError, TypeError):
         return None
-    if not price.is_finite() or price <= 0:
+    return number if number.is_finite() else None
+
+
+def _positive_decimal(value: Any) -> Decimal | None:
+    number = _decimal(value)
+    return number if number is not None and number > 0 else None
+
+
+def _integer(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
         return None
-    return price
+    try:
+        number = int(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    if isinstance(value, float) and value != number:
+        return None
+    if isinstance(value, str) and str(number) != value.strip():
+        return None
+    return number
 
 
-def valid_candle_closes(candles: list[list[Any]]) -> list[tuple[int, Decimal]]:
-    """Return (close-time-ms, close) for completed, traded 1m kline rows only."""
-    rows: dict[int, Decimal] = {}
-    for candle in candles:
-        if not isinstance(candle, (list, tuple)) or len(candle) < 9:
-            continue
-        close_time = candle[6]
-        trade_count = candle[8]
-        if isinstance(close_time, bool) or not isinstance(close_time, (int, float)):
-            continue
-        if isinstance(close_time, float) and not math.isfinite(close_time):
-            continue
-        if isinstance(trade_count, bool):
-            continue
-        try:
-            trades = int(trade_count)
-        except (ValueError, TypeError, OverflowError):
-            continue
-        if trades <= 0:
-            continue
-        price = _valid_price(candle[4])
-        if price is None:
-            continue
-        rows[int(close_time)] = price
-    return sorted(rows.items())
+def parse_binance_24h_tickers(
+    payload: Any,
+    as_of_ms: int | None = None,
+    max_window_age_seconds: int = MAX_TICKER_WINDOW_AGE_SECONDS,
+) -> dict[str, dict[str, Any]]:
+    """Validate and index Binance's 24-hour ticker report without recomputing returns.
 
+    The returned return_24h_pct is Binance's priceChangePercent field verbatim
+    after numeric validation. It is not calculated from openPrice and lastPrice.
+    """
+    if not isinstance(payload, list):
+        raise ValueError("GET /fapi/v1/ticker/24hr without a symbol must return an array")
 
-def calculate_trailing_return(
-    candles: list[list[Any]],
-    as_of_ms: int,
-    max_price_age_seconds: int = MAX_PRICE_AGE_SECONDS,
-    reference_tolerance_seconds: int = REFERENCE_TOLERANCE_SECONDS,
-) -> dict[str, Any]:
-    """Calculate a near-24h return from completed, non-empty 1m contract klines."""
-    all_valid = valid_candle_closes(candles)
-    # Latest fully completed one-minute candle, not the still-forming minute.
-    completed_cutoff_ms = (as_of_ms // ONE_MINUTE_MILLISECONDS) * ONE_MINUTE_MILLISECONDS - 1
-    valid = [(ts, px) for ts, px in all_valid if ts <= completed_cutoff_ms]
-    if not valid:
-        return {"valid": False, "reason": "no_completed_current_close",
-                "valid_close_count": 0}
-    if len(valid) < 2:
-        return {"valid": False, "reason": "insufficient_valid_traded_closes",
-                "valid_close_count": len(valid)}
-    current_ts, current_price = valid[-1]
-    current_age_ms = completed_cutoff_ms - current_ts
-    if current_age_ms < 0 or current_age_ms > max_price_age_seconds * 1000:
-        return {"valid": False, "reason": "stale_current_price",
-                "valid_close_count": len(valid), "current_price_ts_ms": current_ts,
-                "current_price_age_seconds": round(current_age_ms / 1000, 3)}
+    records: dict[str, dict[str, Any]] = {}
+    for ticker in payload:
+        if not isinstance(ticker, dict):
+            raise ValueError("Every 24-hour ticker row must be a JSON object")
+        symbol = ticker.get("symbol")
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise ValueError("24-hour ticker row is missing a valid symbol")
+        if symbol in records:
+            raise ValueError(f"Duplicate symbol in Binance 24-hour ticker report: {symbol}")
 
-    reference_cutoff_ms = current_ts - LOOKBACK_MILLISECONDS
-    reference_candidates = [(ts, px) for ts, px in valid if ts <= reference_cutoff_ms]
-    if not reference_candidates:
-        return {"valid": False, "reason": "missing_24h_reference_close",
-                "valid_close_count": len(valid), "current_price_ts_ms": current_ts,
-                "current_price_age_seconds": round(current_age_ms / 1000, 3)}
-    reference_ts, reference_price = reference_candidates[-1]
-    reference_gap_ms = reference_cutoff_ms - reference_ts
-    if reference_gap_ms < 0 or reference_gap_ms > reference_tolerance_seconds * 1000:
-        return {"valid": False, "reason": "stale_24h_reference_price",
-                "valid_close_count": len(valid), "current_price_ts_ms": current_ts,
-                "current_price_age_seconds": round(current_age_ms / 1000, 3),
-                "reference_price_ts_ms": reference_ts,
-                "reference_gap_seconds": round(reference_gap_ms / 1000, 3)}
+        percent = _decimal(ticker.get("priceChangePercent"))
+        last_price = _positive_decimal(ticker.get("lastPrice"))
+        open_price = _positive_decimal(ticker.get("openPrice"))
+        trade_count = _integer(ticker.get("count"))
+        open_time = _integer(ticker.get("openTime"))
+        close_time = _integer(ticker.get("closeTime"))
+        reasons: list[str] = []
 
-    elapsed_ms = current_ts - reference_ts
-    if elapsed_ms < LOOKBACK_MILLISECONDS:
-        return {"valid": False, "reason": "reference_window_not_at_least_24h",
-                "valid_close_count": len(valid)}
+        if percent is None:
+            reasons.append("invalid_price_change_percent")
+        if last_price is None:
+            reasons.append("invalid_last_price")
+        if open_price is None:
+            reasons.append("invalid_open_price")
+        if trade_count is None or trade_count <= 0:
+            reasons.append("no_valid_trades_in_24h_window")
+        if open_time is None or close_time is None or open_time <= 0 or close_time <= open_time:
+            reasons.append("invalid_ticker_window_timestamps")
 
-    pct = (current_price / reference_price - Decimal("1")) * Decimal("100")
-    return {
-        "valid": True, "reason": None,
-        "return_24h_pct": format(pct, ".8f"),
-        "current_price": format(current_price, "f"),
-        "current_price_ts_ms": current_ts,
-        "current_price_age_seconds": round(current_age_ms / 1000, 3),
-        "reference_price": format(reference_price, "f"),
-        "reference_price_ts_ms": reference_ts,
-        "reference_gap_seconds": round(reference_gap_ms / 1000, 3),
-        "observation_interval_seconds": round(elapsed_ms / 1000, 3),
-        "valid_close_count": len(valid),
-    }
+        window_age_seconds: float | None = None
+        if close_time is not None and as_of_ms is not None:
+            window_age_ms = as_of_ms - close_time
+            window_age_seconds = round(window_age_ms / 1000, 3)
+            if abs(window_age_ms) > max_window_age_seconds * 1000:
+                reasons.append("stale_ticker_window")
+
+        quote_volume = _decimal(ticker.get("quoteVolume"))
+        volume = _decimal(ticker.get("volume"))
+        price_change = _decimal(ticker.get("priceChange"))
+        record = {
+            "symbol": symbol,
+            "valid": not reasons,
+            "reason": ";".join(reasons) if reasons else None,
+            "return_24h_pct": format(percent, "f") if percent is not None else None,
+            "price_change_percent": format(percent, "f") if percent is not None else None,
+            "last_price": format(last_price, "f") if last_price is not None else None,
+            "open_price": format(open_price, "f") if open_price is not None else None,
+            "price_change": format(price_change, "f") if price_change is not None else None,
+            "quote_volume": format(quote_volume, "f") if quote_volume is not None else None,
+            "volume": format(volume, "f") if volume is not None else None,
+            "trade_count": trade_count,
+            "ticker_window_open_time_ms": open_time,
+            "ticker_window_close_time_ms": close_time,
+            "ticker_window_age_seconds": window_age_seconds,
+            "last_trade_timestamp_available": False,
+        }
+        records[symbol] = record
+
+    return records
 
 
 def build_provisional_leaders(

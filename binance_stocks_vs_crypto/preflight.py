@@ -1,4 +1,4 @@
-"""Read-only diagnostic for Binance USDⓈ-M stock and crypto perpetuals."""
+"""Read-only diagnostic for Binance USD-M stock and crypto perpetuals."""
 from __future__ import annotations
 
 import argparse
@@ -14,14 +14,15 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .rankings import classify_binance_universe
+from .rankings import classify_binance_universe, parse_binance_24h_tickers
 
 BASE_URL = "https://fapi.binance.com/fapi/v1/"
-USER_AGENT = "binance-stocks-vs-crypto-read-only-preflight/0.1"
+USER_AGENT = "binance-stocks-vs-crypto-read-only-preflight/0.2"
 MAX_BYTES = 24 * 1024 * 1024
 RETRYABLE = {429, 500, 502, 503, 504}
-ALLOWED_ROUTES = frozenset({"exchangeInfo", "time", "tradingSchedule", "continuousKlines",
-                            "depth", "premiumIndex"})
+ALLOWED_ROUTES = frozenset({
+    "exchangeInfo", "time", "tradingSchedule", "ticker/24hr", "depth", "premiumIndex"
+})
 
 
 class ApiError(RuntimeError):
@@ -55,12 +56,17 @@ def request_json(path: str, params: dict[str, str] | None = None,
                     raise ApiError(f"Response was not valid UTF-8 JSON: {exc}", int(response.status)) from exc
                 headers = {k.lower(): v for k, v in response.headers.items()}
                 return data, {
-                    "url": url, "http_status": int(response.status),
+                    "url": url,
+                    "http_status": int(response.status),
                     "elapsed_seconds": round(time.monotonic() - started, 3),
-                    "response_bytes": len(body), "content_type": headers.get("content-type"),
-                    "date_header": headers.get("date"), "retry_after": headers.get("retry-after"),
-                    "rate_limit_headers": {k: v for k, v in headers.items()
-                                           if "rate" in k or "limit" in k or "request-id" in k},
+                    "response_bytes": len(body),
+                    "content_type": headers.get("content-type"),
+                    "date_header": headers.get("date"),
+                    "retry_after": headers.get("retry-after"),
+                    "rate_limit_headers": {
+                        k: v for k, v in headers.items()
+                        if "rate" in k or "limit" in k or "request-id" in k
+                    },
                 }
         except urllib.error.HTTPError as exc:
             detail = exc.read(800).decode("utf-8", errors="replace")
@@ -94,16 +100,34 @@ def call(name: str, path: str, params: dict[str, str] | None = None) -> dict[str
                 "duration_seconds": round(time.monotonic() - started, 3), "payload": None}
 
 
-def summarise_klines(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, list):
-        return {"schema_valid": False, "reason": "expected a kline array"}
-    valid_rows = [row for row in payload if isinstance(row, (list, tuple)) and len(row) >= 12]
-    return {"schema_valid": len(valid_rows) == len(payload) and bool(payload),
-            "row_count": len(payload),
-            "first_open_time_ms": valid_rows[0][0] if valid_rows else None,
-            "last_close_time_ms": valid_rows[-1][6] if valid_rows else None,
-            "sample_close": valid_rows[-1][4] if valid_rows else None,
-            "sample_trade_count": valid_rows[-1][8] if valid_rows else None}
+def summarise_24h_ticker(payload: Any, as_of_ms: int | None = None) -> dict[str, Any]:
+    """Summarise one symbol-scoped ticker response for preflight validation."""
+    if not isinstance(payload, dict):
+        return {"schema_valid": False, "data_valid": False,
+                "reason": "expected a single 24-hour ticker object"}
+    required = ("symbol", "priceChangePercent", "lastPrice", "openPrice",
+                "openTime", "closeTime", "count")
+    if any(key not in payload for key in required):
+        return {"schema_valid": False, "data_valid": False,
+                "reason": "ticker response is missing required fields"}
+    try:
+        parsed = parse_binance_24h_tickers([payload], as_of_ms=as_of_ms)
+    except ValueError as exc:
+        return {"schema_valid": False, "data_valid": False, "reason": str(exc)}
+    item = parsed[payload["symbol"]]
+    return {
+        "schema_valid": True,
+        "data_valid": item["valid"],
+        "reason": item["reason"],
+        "symbol": item["symbol"],
+        "price_change_percent": item["price_change_percent"],
+        "last_price": item["last_price"],
+        "open_price": item["open_price"],
+        "trade_count": item["trade_count"],
+        "ticker_window_open_time_ms": item["ticker_window_open_time_ms"],
+        "ticker_window_close_time_ms": item["ticker_window_close_time_ms"],
+        "ticker_window_age_seconds": item["ticker_window_age_seconds"],
+    }
 
 
 def summarise_orderbook(payload: Any) -> dict[str, Any]:
@@ -135,18 +159,35 @@ def run_preflight() -> dict[str, Any]:
 
     started = datetime.now(timezone.utc)
     report: dict[str, Any] = {
-        "report_version": 1, "project": "binance_stocks_vs_crypto",
+        "report_version": 2,
+        "project": "binance_stocks_vs_crypto",
         "run_at_utc": started.isoformat().replace("+00:00", "Z"),
-        "runner": {"os": platform.platform(), "python": platform.python_version(),
-                   "github_runner_os": os.getenv("RUNNER_OS"),
-                   "github_run_id": os.getenv("GITHUB_RUN_ID"),
-                   "github_sha": os.getenv("GITHUB_SHA"), "github_ref": os.getenv("GITHUB_REF")},
-        "api": {"base_url": BASE_URL, "authentication": "none; public unauthenticated GET only",
-                "methods_used": ["GET"], "provider": "Binance USDⓈ-M Futures only"},
-        "market_universe": {}, "endpoint_results": [], "sample_checks": [], "gates": {},
-        "safety_assertions": {"public_get_only": True, "no_credentials": True,
-            "no_private_account_endpoints": True, "no_order_or_trade_endpoints": True,
-            "no_positions_or_portfolio_state": True, "no_external_price_or_taxonomy_provider": True},
+        "runner": {
+            "os": platform.platform(),
+            "python": platform.python_version(),
+            "github_runner_os": os.getenv("RUNNER_OS"),
+            "github_run_id": os.getenv("GITHUB_RUN_ID"),
+            "github_sha": os.getenv("GITHUB_SHA"),
+            "github_ref": os.getenv("GITHUB_REF"),
+        },
+        "api": {
+            "base_url": BASE_URL,
+            "authentication": "none; public unauthenticated GET only",
+            "methods_used": ["GET"],
+            "provider": "Binance USD-M Futures only",
+        },
+        "market_universe": {},
+        "endpoint_results": [],
+        "sample_checks": [],
+        "gates": {},
+        "safety_assertions": {
+            "public_get_only": True,
+            "no_credentials": True,
+            "no_private_account_endpoints": True,
+            "no_order_or_trade_endpoints": True,
+            "no_positions_or_portfolio_state": True,
+            "no_external_price_or_taxonomy_provider": True,
+        },
     }
 
     exchange = call("exchange_info", "exchangeInfo")
@@ -187,15 +228,20 @@ def run_preflight() -> dict[str, Any]:
         if exchange.get("status") == "FAIL_SCHEMA":
             exchange["error"] = "Exchange information did not contain a symbols array"
         universe = {"long": [], "short": [], "excluded": []}
-    exchange["payload_summary"] = {"response_keys": sorted(exchange_payload) if isinstance(exchange_payload, dict) else [],
-                                   "symbol_count": len(symbols) if isinstance(symbols, list) else None}
+    exchange["payload_summary"] = {
+        "response_keys": sorted(exchange_payload) if isinstance(exchange_payload, dict) else [],
+        "symbol_count": len(symbols) if isinstance(symbols, list) else None,
+    }
     report["endpoint_results"].append(exchange)
 
     server_time = call("server_time", "time")
     time_payload = server_time.pop("payload")
-    server_time_ok = isinstance(time_payload, dict) and isinstance(time_payload.get("serverTime"), int)
-    server_time["payload_summary"] = {"server_time_ms": time_payload.get("serverTime") if isinstance(time_payload, dict) else None,
-                                      "schema_valid": server_time_ok}
+    server_time_ms = time_payload.get("serverTime") if isinstance(time_payload, dict) else None
+    server_time_ok = isinstance(server_time_ms, int) and not isinstance(server_time_ms, bool)
+    server_time["payload_summary"] = {
+        "server_time_ms": server_time_ms if server_time_ok else None,
+        "schema_valid": server_time_ok,
+    }
     if server_time["status"] == "PASS" and not server_time_ok:
         server_time["status"] = "FAIL_SCHEMA"
         server_time["error"] = "Server-time response missing integer serverTime"
@@ -203,10 +249,15 @@ def run_preflight() -> dict[str, Any]:
 
     schedule = call("underlying_trading_schedule", "tradingSchedule")
     schedule_payload = schedule.pop("payload")
-    schedule_ok = isinstance(schedule_payload, dict) and isinstance(schedule_payload.get("marketSchedules"), dict)
-    schedule["payload_summary"] = {"schema_valid": schedule_ok,
+    schedule_ok = (
+        isinstance(schedule_payload, dict)
+        and isinstance(schedule_payload.get("marketSchedules"), dict)
+    )
+    schedule["payload_summary"] = {
+        "schema_valid": schedule_ok,
         "market_schedule_groups": sorted(schedule_payload.get("marketSchedules", {})) if schedule_ok else [],
-        "note": "Underlying-market hours are informational only; TradFi perpetual contracts remain continuously tradable."}
+        "note": "Underlying-market hours are informational only; TradFi perpetual contracts remain continuously tradable.",
+    }
     if schedule["status"] == "PASS" and not schedule_ok:
         schedule["status"] = "FAIL_SCHEMA"
         schedule["error"] = "Trading-schedule response missing marketSchedules object"
@@ -218,17 +269,18 @@ def run_preflight() -> dict[str, Any]:
             samples.append((side, universe[side][0]))
     for side, market in samples:
         symbol = str(market["symbol"])
-        pair = str(market.get("pair") or symbol)
-        contract_type = str(market["contractType"])
-        kline = call(f"sample_1m_continuous_klines:{symbol}", "continuousKlines",
-                     {"pair": pair, "contractType": contract_type, "interval": "1m", "limit": "3"})
-        kline_payload = kline.pop("payload")
-        kline_summary = summarise_klines(kline_payload)
-        if kline["status"] == "PASS" and not kline_summary["schema_valid"]:
-            kline["status"] = "FAIL_SCHEMA"
-            kline["error"] = kline_summary.get("reason", "Invalid continuous-kline schema")
-        kline["payload_summary"] = kline_summary
-        report["endpoint_results"].append(kline)
+        ticker = call(
+            f"sample_24h_ticker:{symbol}", "ticker/24hr", {"symbol": symbol}
+        )
+        ticker_payload = ticker.pop("payload")
+        ticker_summary = summarise_24h_ticker(
+            ticker_payload, as_of_ms=server_time_ms if server_time_ok else None
+        )
+        if ticker["status"] == "PASS" and not ticker_summary["schema_valid"]:
+            ticker["status"] = "FAIL_SCHEMA"
+            ticker["error"] = ticker_summary.get("reason", "Invalid 24-hour ticker schema")
+        ticker["payload_summary"] = ticker_summary
+        report["endpoint_results"].append(ticker)
 
         depth = call(f"sample_order_book:{symbol}", "depth", {"symbol": symbol, "limit": "5"})
         depth_payload = depth.pop("payload")
@@ -247,22 +299,38 @@ def run_preflight() -> dict[str, Any]:
             premium["error"] = premium_summary.get("reason", "Invalid premium-index schema")
         premium["payload_summary"] = premium_summary
         report["endpoint_results"].append(premium)
-        report["sample_checks"].append({"side": side, "symbol": symbol,
-            "contract_type": contract_type, "underlying_type": market.get("underlyingType"),
-            "continuous_klines": kline_summary, "order_book": depth_summary,
-            "mark_index_funding": premium_summary})
+        report["sample_checks"].append({
+            "side": side,
+            "symbol": symbol,
+            "contract_type": market.get("contractType"),
+            "underlying_type": market.get("underlyingType"),
+            "ticker_24h": ticker_summary,
+            "order_book": depth_summary,
+            "mark_index_funding": premium_summary,
+        })
 
     statuses = [item["status"] for item in report["endpoint_results"]]
     endpoint_ok = bool(statuses) and all(status == "PASS" for status in statuses)
     long_ok = bool(universe["long"])
     short_ok = bool(universe["short"])
+    ticker_checks = [
+        item for item in report["endpoint_results"]
+        if item["name"].startswith("sample_24h_ticker:")
+    ]
+    ticker_schema_ok = len(ticker_checks) == len(samples) and all(
+        item["payload_summary"]["schema_valid"] for item in ticker_checks
+    )
     report["gates"] = {
         "public_exchange_info": "PASS" if report["market_universe"] else "FAIL",
         "stock_and_index_perp_universe": "PASS" if long_ok else "FAIL",
         "crypto_perp_universe": "PASS" if short_ok else "FAIL",
-        "sample_kline_orderbook_and_funding_endpoints": "PASS" if endpoint_ok else "FAIL",
-        "overall_read_only_preflight": "PASS" if endpoint_ok and long_ok and short_ok else "FAIL",
-        "ranking": "NOT_RUN", "paper_trading": "NOT_IMPLEMENTED",
+        "sample_24h_ticker_orderbook_and_funding_endpoints": "PASS" if endpoint_ok else "FAIL",
+        "ticker_endpoint_supports_sampled_contract_types": "PASS" if ticker_schema_ok else "FAIL",
+        "overall_read_only_preflight": (
+            "PASS" if endpoint_ok and long_ok and short_ok and ticker_schema_ok else "FAIL"
+        ),
+        "ranking": "NOT_RUN",
+        "paper_trading": "NOT_IMPLEMENTED",
         "order_submission": "NOT_PRESENT",
     }
     return report
@@ -270,28 +338,47 @@ def run_preflight() -> dict[str, Any]:
 
 def render_markdown(report: dict[str, Any]) -> str:
     universe = report.get("market_universe", {})
-    lines = ["# Binance Stock/Index Perpetuals vs Crypto Perpetuals — API Preflight", "",
-        f"- Run: {report['run_at_utc']}", f"- Active exchange symbols: {universe.get('exchange_symbol_count')}",
-        "- Provider: Binance USDⓈ-M Futures only", "- Authentication: none; public GET only", "",
-        "## Approved universe", "",
+    lines = [
+        "# Binance Stock/Index Perpetuals vs Crypto Perpetuals — API Preflight",
+        "",
+        f"- Run: {report['run_at_utc']}",
+        f"- Active exchange symbols: {universe.get('exchange_symbol_count')}",
+        "- Provider: Binance USD-M Futures only",
+        "- Authentication: none; public GET only",
+        "",
+        "## Approved universe",
+        "",
         f"- Long stock/index perpetuals: {universe.get('long_stock_and_index_perps_count')}",
         f"- Short crypto perpetuals: {universe.get('short_crypto_perps_count')}",
         f"- Excluded: {universe.get('excluded_count')}",
-        "- Classification uses exact Binance `contractType`, `underlyingType`, `status`, and USDT settlement fields.",
+        "- Classification uses exact Binance contractType, underlyingType, status, and USDT settlement fields.",
         "- Commodity, FX, and unknown underlying types are excluded; no ticker/title inference.",
-        "- Trading-session schedules are informational only; no stock-market-open gate is used.", "",
-        "## Sample contracts", "",
-        "| Side | Symbol | Contract type | Underlying type |", "|---|---|---|---|"]
+        "- Trading-session schedules are informational only; no stock-market-open gate is used.",
+        "",
+        "## Sample contracts",
+        "",
+        "| Side | Symbol | Contract type | Underlying type | Ticker 24h % | Ticker data valid |",
+        "|---|---|---|---|---:|---|",
+    ]
     for sample in report.get("sample_checks", []):
-        lines.append(f"| {sample['side']} | {sample['symbol']} | {sample['contract_type']} | {sample['underlying_type']} |")
+        ticker = sample["ticker_24h"]
+        lines.append(
+            f"| {sample['side']} | {sample['symbol']} | {sample['contract_type']} | "
+            f"{sample['underlying_type']} | {ticker.get('price_change_percent')} | "
+            f"{ticker.get('data_valid')} |"
+        )
     lines.extend(["", "## Endpoint checks", "", "| Endpoint | Status | Detail |", "|---|---|---|"])
     for item in report.get("endpoint_results", []):
         detail = item.get("error") or str(item.get("payload_summary", {}))[:220]
-        lines.append(f"| {item['name']} | {item['status']} | {detail.replace('|', '/') } |")
+        lines.append(f"| {item['name']} | {item['status']} | {detail.replace('|', '/')} |")
     lines.extend(["", "## Gates", "", "| Gate | Status |", "|---|---|"])
     lines.extend(f"| {name} | **{status}** |" for name, status in report.get("gates", {}).items())
-    lines.extend(["", "No account state, positions, portfolio state, simulated fills, or exchange orders are read or written.",
-        "Stock TradFi perps trade 24/7, but Binance's underlying index is based on underlying-market references during market hours and uses off-hours handling; the ranking stage uses the contract's own traded-price klines, not mark-price or index-price klines.", ""])
+    lines.extend([
+        "",
+        "No account state, positions, portfolio state, simulated fills, or exchange orders are read or written.",
+        "The 24-hour ticker endpoint is checked for one sampled stock/index contract and one sampled crypto contract.",
+        "",
+    ])
     return "\n".join(lines)
 
 
@@ -302,8 +389,12 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     report = run_preflight()
-    (out / "binance_preflight_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    (out / "binance_preflight_report.md").write_text(render_markdown(report), encoding="utf-8")
+    (out / "binance_preflight_report.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    (out / "binance_preflight_report.md").write_text(
+        render_markdown(report), encoding="utf-8"
+    )
     print(json.dumps(report["gates"], indent=2))
     return 0 if report["gates"]["overall_read_only_preflight"] == "PASS" else 1
 

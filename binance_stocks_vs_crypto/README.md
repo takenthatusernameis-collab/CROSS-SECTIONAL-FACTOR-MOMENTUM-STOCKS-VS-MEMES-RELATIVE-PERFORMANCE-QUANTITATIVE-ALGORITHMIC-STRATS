@@ -1,29 +1,41 @@
-# Binance Stock/Index Perpetuals vs Crypto Perpetuals — isolated research increment
+# Binance Stock/Index Perpetuals vs Crypto Perpetuals
 
-This isolated Binance research namespace replaces the former Kalshi experiment. It does not alter the legacy stocks_vs_memes/ Bybit + CoinMarketCap implementation, its SQLite state, reports, dependencies or daily workflow.
+This package discovers eligible Binance USD-M Futures contracts and produces a daily read-only cross-sectional ranking.
 
 ## Dynamic universe
-Every run refreshes Binance USDⓈ-M Futures exchangeInfo. Long: active USDT-quoted/margined TRADIFI_PERPETUAL contracts whose exact underlyingType is EQUITY, CN_EQUITY, KR_EQUITY, HK_EQUITY, PREMARKET or INDEX. Short: active USDT-quoted/margined PERPETUAL contracts with underlyingType=COIN. Other and unknown types are excluded. No static symbol list or ticker inference is used; new eligible contracts enter on the next refresh.
+
+Every run refreshes Binance USD-M Futures exchangeInfo. Long: active USDT-quoted/margined TRADIFI_PERPETUAL contracts whose exact underlyingType is EQUITY, CN_EQUITY, KR_EQUITY, HK_EQUITY, PREMARKET or INDEX. Short: active USDT-quoted/margined PERPETUAL contracts with underlyingType=COIN. Other and unknown types are excluded. There is no static symbol list or ticker-name inference; newly eligible listings enter after the next metadata refresh.
 
 ## Stage 1: public API preflight
-Run: python -m binance_stocks_vs_crypto.preflight --output-dir artifacts/binance-preflight
-This checks dynamic exchange metadata, server time, trading schedules (informational only), and sample stock/index and crypto contract klines, books and premium-index/funding fields. Public unauthenticated GET only.
 
-## Stage 2: full-universe ranking diagnostic
-Run: python -m binance_stocks_vs_crypto.ranking_preflight --output-dir artifacts/binance-ranking-preflight --workers 4
-The daily GitHub Actions workflow runs at 00:05 UTC and can also be dispatched manually. It ranks every active accepted perpetual by its own one-minute traded-contract close: highest trailing 24h return on the long side, lowest on the short side. Zero-trade and forming candles are excluded; stale/missing contract observations are reported and make coverage incomplete.
+Run:
 
-## Frozen parameters for later paper stage
-- Long 1× NAV; short 1× NAV; gross exposure 2× NAV.
+    python -m binance_stocks_vs_crypto.preflight --output-dir artifacts/binance-preflight
+
+This checks live exchange metadata, server time, the trading schedule for information only, and sample 24-hour ticker, order-book and premium-index/funding responses for one eligible contract on each side. The 24-hour ticker check tests both stock/index and crypto contract categories. Requests are unauthenticated public GETs only.
+
+## Stage 2: daily full-universe ranking diagnostic
+
+Run:
+
+    python -m binance_stocks_vs_crypto.ranking_preflight --output-dir artifacts/binance-ranking-preflight
+
+The GitHub Actions workflow runs daily at 00:05 UTC and can also be dispatched manually. Each run makes one unfiltered GET request to /fapi/v1/ticker/24hr, then matches its rows to the live eligible universe from exchangeInfo.
+
+The ranking uses Binance's priceChangePercent field directly:
+- LONG: highest reported 24-hour percentage change among eligible stock/index perpetuals.
+- SHORT: lowest reported 24-hour percentage change among eligible crypto perpetuals.
+
+The workflow does not reconstruct the percentage from candle history or from lastPrice/openPrice. It validates required fields, positive open and last prices, a positive 24-hour trade count, unique symbols and ticker-window timestamp freshness. A missing or invalid row makes the universe coverage incomplete. Extra ticker rows outside the approved universe are ignored.
+
+The response includes ticker-window openTime/closeTime and count, but does not expose an exact timestamp for the latest individual trade. Consequently, ticker-window freshness is not proof that the last trade itself occurred within the previous 15 minutes; this limitation is recorded in the report.
+
+## Frozen strategy parameters for a later paper stage
+
 - Exactly one long and one short.
-- At most one pair rebalance per UTC calendar day.
-- No averaging, pyramiding, intraday reranking or discretionary substitutions.
-- Paper only; no live or demo orders.
+- Long target notional = 1× NAV; short target notional = 1× NAV; gross exposure = 2× NAV.
+- At most one pair-rebalance attempt per UTC calendar day after the ranking snapshot.
+- No intraday reranking, averaging, pyramiding, discretionary substitutions or additional signal filters.
+- No underlying-equity session gate: stock/index perpetuals remain eligible around the clock.
 
-Stages 1 and 2 do not create paper positions, fills, NAV or portfolio state. Contract economics, fees, funding, margin, off-hours pricing and regional product eligibility require validation before later paper trading.
-
-## 24/7 and access caveat
-Binance TradFi perpetual contracts can trade 24/7, including when the underlying stock exchange is closed. The underlying index reference and mark-price smoothing can behave differently off-hours; the ranking intentionally uses the perpetual contract's own trades. A public market-data API response does not establish that Binance TradFi Perps are enabled for a specific account or jurisdiction; verify current product eligibility.
-
-## Boundaries
-Binance USDⓈ-M Futures is the sole provider in this package. No Kalshi, CoinMarketCap, Bybit, external price source, API credentials, private account endpoints or order endpoints. The historical Bybit/CMC predecessor and Pionex Grid Restarter remain untouched.
+Stages 1 and 2 do not create simulated positions, fills, NAV or portfolio state. They submit no orders. Contract economics, fees, funding, margin, off-hours pricing and account/jurisdiction product eligibility must be validated before any later paper-trading implementation.

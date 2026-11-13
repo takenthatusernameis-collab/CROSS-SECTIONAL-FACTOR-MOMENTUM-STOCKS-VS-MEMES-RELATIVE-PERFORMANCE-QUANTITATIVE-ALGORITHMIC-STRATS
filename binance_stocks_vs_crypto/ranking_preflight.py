@@ -1,4 +1,4 @@
-"""Read-only, full-universe trailing-24h Binance perpetual ranking diagnostic."""
+"""Read-only, full-universe Binance 24-hour ticker ranking diagnostic."""
 from __future__ import annotations
 
 import argparse
@@ -6,72 +6,67 @@ import json
 import os
 import platform
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .preflight import BASE_URL, request_json
 from .rankings import (
-    LOOKBACK_MILLISECONDS, ONE_MINUTE_MILLISECONDS, MAX_PRICE_AGE_SECONDS,
-    REFERENCE_TOLERANCE_SECONDS, build_provisional_leaders,
-    calculate_trailing_return, classify_binance_universe,
+    MAX_TICKER_WINDOW_AGE_SECONDS, build_provisional_leaders,
+    classify_binance_universe, parse_binance_24h_tickers,
 )
 
-KLINE_LIMIT = 1500
-KLINE_WINDOW_MILLISECONDS = LOOKBACK_MILLISECONDS + (32 * ONE_MINUTE_MILLISECONDS)
 
-
-def fetch_market_candles(market: dict[str, Any], as_of_ms: int) -> dict[str, Any]:
-    symbol = str(market["symbol"])
-    pair = str(market.get("pair") or symbol)
-    contract_type = str(market["contractType"])
-    try:
-        candles, meta = request_json("continuousKlines", {
-            "pair": pair, "contractType": contract_type, "interval": "1m",
-            "startTime": str(as_of_ms - KLINE_WINDOW_MILLISECONDS),
-            "endTime": str(as_of_ms), "limit": str(KLINE_LIMIT),
-        }, timeout=22.0, attempts=3)
-        if not isinstance(candles, list):
-            raise ValueError("continuousKlines did not return an array")
-        observation = calculate_trailing_return(candles, as_of_ms)
-        return {"symbol": symbol, "pair": pair, "contract_type": contract_type,
-                "underlying_type": market.get("underlyingType"),
-                "underlying_sub_type": market.get("underlyingSubType"),
-                "quote_asset": market.get("quoteAsset"), "candle_count": len(candles),
-                **observation, "http_status": meta["http_status"],
-                "request_seconds": meta["elapsed_seconds"]}
-    except Exception as exc:
-        return {"symbol": symbol, "pair": pair, "contract_type": contract_type,
-                "underlying_type": market.get("underlyingType"), "valid": False,
-                "reason": "request_or_schema_error:" + type(exc).__name__ + ":" + str(exc),
-                "http_status": getattr(exc, "status", None)}
-
-
-def run_ranking_preflight(max_workers: int = 4) -> dict[str, Any]:
+def run_ranking_preflight() -> dict[str, Any]:
     started = datetime.now(timezone.utc)
     report: dict[str, Any] = {
-        "report_version": 1, "project": "binance_stocks_vs_crypto",
+        "report_version": 2,
+        "project": "binance_stocks_vs_crypto",
         "run_at_utc": started.isoformat().replace("+00:00", "Z"),
-        "runner": {"os": platform.platform(), "python": platform.python_version(),
-            "github_runner_os": os.getenv("RUNNER_OS"), "github_run_id": os.getenv("GITHUB_RUN_ID"),
-            "github_sha": os.getenv("GITHUB_SHA"), "github_ref": os.getenv("GITHUB_REF")},
-        "api": {"base_url": BASE_URL, "methods": ["GET"], "authentication": "none",
+        "runner": {
+            "os": platform.platform(),
+            "python": platform.python_version(),
+            "github_runner_os": os.getenv("RUNNER_OS"),
+            "github_run_id": os.getenv("GITHUB_RUN_ID"),
+            "github_sha": os.getenv("GITHUB_SHA"),
+            "github_ref": os.getenv("GITHUB_REF"),
+        },
+        "api": {
+            "base_url": BASE_URL,
+            "methods": ["GET"],
+            "authentication": "none",
             "market_data_provider": "Binance USD-M Futures only",
-            "candle_endpoint": "/fapi/v1/continuousKlines", "interval": "1m"},
+            "ranking_endpoint": "/fapi/v1/ticker/24hr",
+            "ranking_request_count": 1,
+            "ranking_metric": "Binance priceChangePercent from its rolling 24-hour ticker report",
+            "local_return_recalculation": False,
+        },
         "strategy_scope": {
             "long_contract_type": "TRADIFI_PERPETUAL",
             "long_underlying_types": ["EQUITY", "CN_EQUITY", "KR_EQUITY", "HK_EQUITY", "PREMARKET", "INDEX"],
-            "short_contract_type": "PERPETUAL", "short_underlying_types": ["COIN"],
+            "short_contract_type": "PERPETUAL",
+            "short_underlying_types": ["COIN"],
             "quote_and_margin_asset": "USDT",
-            "ranking_price": "last traded contract close from completed one-minute continuous klines; not mark/index price",
-            "long_notional": "1x NAV", "short_notional": "1x NAV", "gross_exposure": "2x NAV",
-            "paper_positions_created": False},
-        "exchange_info": {}, "coverage": {}, "provisional_leaders": {},
-        "market_results": [], "gates": {},
-        "safety_assertions": {"public_get_only": True, "no_credentials": True,
-            "no_private_account_endpoints": True, "no_order_endpoints": True,
-            "no_positions_or_portfolio_state": True, "no_external_price_or_taxonomy_provider": True},
+            "ranking_price": "Binance 24-hour ticker priceChangePercent; latest ticker lastPrice is reported for context",
+            "long_notional": "1x NAV",
+            "short_notional": "1x NAV",
+            "gross_exposure": "2x NAV",
+            "paper_positions_created": False,
+        },
+        "exchange_info": {},
+        "ticker_report": {},
+        "coverage": {},
+        "provisional_leaders": {},
+        "market_results": [],
+        "gates": {},
+        "safety_assertions": {
+            "public_get_only": True,
+            "no_credentials": True,
+            "no_private_account_endpoints": True,
+            "no_order_endpoints": True,
+            "no_positions_or_portfolio_state": True,
+            "no_external_price_or_taxonomy_provider": True,
+        },
     }
 
     exchange_payload, exchange_meta = request_json("exchangeInfo")
@@ -79,37 +74,78 @@ def run_ranking_preflight(max_workers: int = 4) -> dict[str, Any]:
     if not isinstance(symbols, list) or any(not isinstance(item, dict) for item in symbols):
         raise ValueError("GET /fapi/v1/exchangeInfo did not return a symbols array")
     universe = classify_binance_universe(symbols)
+
     server_payload, server_meta = request_json("time")
     as_of_ms = server_payload.get("serverTime") if isinstance(server_payload, dict) else None
     if isinstance(as_of_ms, bool) or not isinstance(as_of_ms, int):
         raise ValueError("GET /fapi/v1/time did not return integer serverTime")
 
+    ticker_payload, ticker_meta = request_json("ticker/24hr")
+    ticker_records = parse_binance_24h_tickers(ticker_payload, as_of_ms=as_of_ms)
+
     counts: dict[str, int] = {}
     for item in symbols:
-        key = "{}|{}|{}|{}".format(item.get("contractType"), item.get("underlyingType"),
-                                    item.get("status"), item.get("quoteAsset"))
+        key = "{}|{}|{}|{}".format(
+            item.get("contractType"), item.get("underlyingType"),
+            item.get("status"), item.get("quoteAsset")
+        )
         counts[key] = counts.get(key, 0) + 1
     excluded_counts: dict[str, int] = {}
     for item in universe["excluded"]:
         key = item["reason"]
         excluded_counts[key] = excluded_counts.get(key, 0) + 1
     targets = universe["long"] + universe["short"]
+
     report["exchange_info"] = {
-        "http_status": exchange_meta["http_status"], "server_time_http_status": server_meta["http_status"],
-        "as_of_server_time_ms": as_of_ms, "exchange_symbol_count": len(symbols),
+        "http_status": exchange_meta["http_status"],
+        "server_time_http_status": server_meta["http_status"],
+        "as_of_server_time_ms": as_of_ms,
+        "exchange_symbol_count": len(symbols),
         "long_stock_and_index_perp_count": len(universe["long"]),
-        "short_crypto_perp_count": len(universe["short"]), "excluded_count": len(universe["excluded"]),
+        "short_crypto_perp_count": len(universe["short"]),
+        "excluded_count": len(universe["excluded"]),
         "contract_underlying_status_quote_counts": dict(sorted(counts.items())),
         "excluded_reason_counts": dict(sorted(excluded_counts.items())),
-        "ranking_request_count": len(targets),
         "all_exchange_symbols_unique": len(symbols) == len({m.get("symbol") for m in symbols}),
+    }
+    report["ticker_report"] = {
+        "http_status": ticker_meta["http_status"],
+        "request_seconds": ticker_meta["elapsed_seconds"],
+        "response_bytes": ticker_meta["response_bytes"],
+        "response_symbol_count": len(ticker_records),
+        "eligible_universe_count": len(targets),
+        "eligible_symbols_found": sum(1 for market in targets if market["symbol"] in ticker_records),
+        "symbols_not_in_ticker_report": [
+            market["symbol"] for market in targets if market["symbol"] not in ticker_records
+        ],
+        "max_ticker_window_age_seconds": MAX_TICKER_WINDOW_AGE_SECONDS,
+        "last_trade_timestamp_included_by_endpoint": False,
     }
 
     results: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(fetch_market_candles, market, as_of_ms): market for market in targets}
-        for future in as_completed(futures):
-            results.append(future.result())
+    for market in targets:
+        symbol = market["symbol"]
+        ticker = ticker_records.get(symbol)
+        if ticker is None:
+            result = {
+                "symbol": symbol,
+                "valid": False,
+                "reason": "missing_from_24h_ticker_report",
+                "return_24h_pct": None,
+                "last_price": None,
+                "trade_count": None,
+                "ticker_window_age_seconds": None,
+            }
+        else:
+            result = dict(ticker)
+        result.update({
+            "contract_type": market.get("contractType"),
+            "underlying_type": market.get("underlyingType"),
+            "underlying_sub_type": market.get("underlyingSubType"),
+            "quote_asset": market.get("quoteAsset"),
+            "margin_asset": market.get("marginAsset"),
+        })
+        results.append(result)
     results.sort(key=lambda item: item["symbol"])
     report["market_results"] = results
 
@@ -122,100 +158,149 @@ def run_ranking_preflight(max_workers: int = 4) -> dict[str, Any]:
 
     total = len(targets)
     valid_count = sum(1 for item in results if item.get("valid"))
-    complete = (len(results) == total and valid_count == total
-                and leaders["long_valid_count"] == len(universe["long"])
-                and leaders["short_valid_count"] == len(universe["short"]))
+    matched_count = sum(1 for item in results if item.get("reason") != "missing_from_24h_ticker_report")
+    complete = (
+        len(results) == total
+        and valid_count == total
+        and leaders["long_valid_count"] == len(universe["long"])
+        and leaders["short_valid_count"] == len(universe["short"])
+    )
     report["coverage"] = {
-        "requested_contract_count": total, "received_contract_count": len(results),
-        "valid_24h_return_count": valid_count, "invalid_or_stale_count": total - valid_count,
+        "eligible_contract_count": total,
+        "ticker_rows_matched_to_eligible_contracts": matched_count,
+        "valid_24h_ticker_count": valid_count,
+        "missing_or_invalid_ticker_count": total - valid_count,
         "coverage_pct": round(100 * valid_count / total, 2) if total else 0.0,
-        "long_valid_count": leaders["long_valid_count"], "long_total_count": len(universe["long"]),
-        "short_valid_count": leaders["short_valid_count"], "short_total_count": len(universe["short"]),
-        "max_current_price_age_seconds": MAX_PRICE_AGE_SECONDS,
-        "max_24h_reference_gap_seconds": REFERENCE_TOLERANCE_SECONDS,
-        "requested_kline_window_minutes": KLINE_WINDOW_MILLISECONDS // 60_000,
-        "kline_limit": KLINE_LIMIT,
+        "long_valid_count": leaders["long_valid_count"],
+        "long_total_count": len(universe["long"]),
+        "short_valid_count": leaders["short_valid_count"],
+        "short_total_count": len(universe["short"]),
+        "ticker_report_requests": 1,
     }
-    leaders_available = bool(leaders["provisional_long_leader"] and leaders["provisional_short_leader"])
+    leaders_available = bool(
+        leaders["provisional_long_leader"] and leaders["provisional_short_leader"]
+    )
     unique = report["exchange_info"]["all_exchange_symbols_unique"]
     report["gates"] = {
         "exchange_info_discovery": "PASS" if unique else "FAIL",
-        "accepted_stock_and_crypto_universes": "PASS" if universe["long"] and universe["short"] else "FAIL",
-        "one_minute_contract_kline_retrieval": "PASS" if len(results) == total and all(r.get("http_status") == 200 for r in results) else "FAIL",
-        "complete_fresh_24h_return_coverage": "PASS" if complete else "FAIL",
+        "accepted_stock_and_crypto_universes": (
+            "PASS" if universe["long"] and universe["short"] else "FAIL"
+        ),
+        "binance_24h_ticker_report_retrieval": (
+            "PASS" if ticker_meta["http_status"] == 200 and ticker_records else "FAIL"
+        ),
+        "complete_valid_24h_ticker_coverage": "PASS" if complete else "FAIL",
         "provisional_leaders_available": "PASS" if leaders_available else "FAIL",
         "ranking_diagnostic": "PASS" if complete and leaders_available else "INCOMPLETE",
-        "paper_trading": "NOT_IMPLEMENTED", "order_submission": "NOT_PRESENT",
+        "paper_trading": "NOT_IMPLEMENTED",
+        "order_submission": "NOT_PRESENT",
     }
     return report
 
 
 def render_markdown(report: dict[str, Any]) -> str:
-    info, coverage = report.get("exchange_info", {}), report.get("coverage", {})
-    lines = ["# Binance Stock/Index Perpetuals vs Crypto Perpetuals — 24-hour Ranking", "",
-        "- Run: " + report["run_at_utc"], "- Binance server time (ms): " + str(info.get("as_of_server_time_ms")),
-        "- Public unauthenticated GET only; no paper positions or orders.", "",
-        "## Universe", "",
+    info = report.get("exchange_info", {})
+    ticker = report.get("ticker_report", {})
+    coverage = report.get("coverage", {})
+    lines = [
+        "# Binance Stock/Index Perpetuals vs Crypto Perpetuals — 24-hour Ranking",
+        "",
+        "- Run: " + report["run_at_utc"],
+        "- Binance server time (ms): " + str(info.get("as_of_server_time_ms")),
+        "- Public unauthenticated GET only; no paper positions or orders.",
+        "- Ranking source: Binance /fapi/v1/ticker/24hr priceChangePercent.",
+        "- Returns are taken directly from Binance; this workflow does not recalculate them.",
+        "",
+        "## Universe",
+        "",
         "- Long: active TRADIFI_PERPETUAL contracts with approved equity/index underlyingType values.",
         "- Short: active PERPETUAL contracts with underlyingType=COIN.",
         "- Both sides require USDT quote and margin assets; other/unknown classes excluded.",
-        "- No ticker inference. No underlying-stock session gate: stock perps trade 24/7.",
-        "- Rankings use the contract's own traded close, not index or mark-price candles.", "",
-        "| Measure | Count |", "|---|---:|"]
-    for label, value in [
-        ("Exchange symbols", info.get("exchange_symbol_count")),
-        ("Long stock/index perps", info.get("long_stock_and_index_perp_count")),
-        ("Short crypto perps", info.get("short_crypto_perp_count")),
-        ("Excluded", info.get("excluded_count")),
-        ("Kline requests", coverage.get("requested_contract_count")),
-        ("Valid 24h returns", coverage.get("valid_24h_return_count")),
-        ("Invalid/stale", coverage.get("invalid_or_stale_count")),
-        ("Coverage %", coverage.get("coverage_pct")),
-    ]:
-        lines.append("| " + label + " | " + str(value) + " |")
-    lines.extend(["", "## Gates", "", "| Gate | Status |", "|---|---|"])
-    lines.extend("| " + k + " | " + v + " |" for k, v in report.get("gates", {}).items())
+        "- No ticker inference. No underlying-equity session gate: stock perps trade 24/7.",
+        "",
+        "## Ticker report and coverage",
+        "",
+        "| Measure | Value |",
+        "|---|---:|",
+        "| Ticker requests | " + str(coverage.get("ticker_report_requests")) + " |",
+        "| Symbols returned by Binance | " + str(ticker.get("response_symbol_count")) + " |",
+        "| Eligible contracts | " + str(coverage.get("eligible_contract_count")) + " |",
+        "| Matched ticker rows | " + str(coverage.get("ticker_rows_matched_to_eligible_contracts")) + " |",
+        "| Valid 24h ticker rows | " + str(coverage.get("valid_24h_ticker_count")) + " |",
+        "| Missing/invalid rows | " + str(coverage.get("missing_or_invalid_ticker_count")) + " |",
+        "| Coverage % | " + str(coverage.get("coverage_pct")) + " |",
+        "",
+        "## Gates",
+        "",
+        "| Gate | Status |",
+        "|---|---|",
+    ]
+    lines.extend("| " + key + " | " + value + " |" for key, value in report.get("gates", {}).items())
     lines.extend(["", "## Provisional leaders", ""])
-    for label, key in [("Long highest return", "provisional_long_leader"),
-                       ("Short lowest return", "provisional_short_leader")]:
+    for label, key in [
+        ("Long highest return", "provisional_long_leader"),
+        ("Short lowest return", "provisional_short_leader"),
+    ]:
         item = report.get("provisional_leaders", {}).get(key)
         if item:
-            lines.append("- " + label + ": " + item["symbol"] + " (" + str(item["underlying_type"]) +
-                         ") — " + item["return_24h_pct"] + "%")
-            lines.append("  - Close " + item["current_price"] + " at " + str(item["current_price_ts_ms"]) +
-                         " ms; reference " + item["reference_price"] + " at " +
-                         str(item["reference_price_ts_ms"]) + " ms.")
+            lines.append(
+                "- " + label + ": " + item["symbol"] + " (" +
+                str(item["underlying_type"]) + ") — " + item["return_24h_pct"] + "%"
+            )
+            lines.append(
+                "  - Binance lastPrice " + str(item["last_price"]) +
+                "; trade count " + str(item["trade_count"]) +
+                "; ticker-window age " + str(item["ticker_window_age_seconds"]) + " seconds."
+            )
         else:
             lines.append("- " + label + ": unavailable")
-    lines.extend(["", "## Per-contract data quality", "",
-        "| Symbol | Contract | Underlying | Return % | Valid | Reason | Current age s | Reference gap s |",
-        "|---|---|---|---:|---|---|---:|---:|"])
+    lines.extend([
+        "",
+        "## Per-contract ticker data",
+        "",
+        "| Symbol | Contract | Underlying | Binance 24h % | Valid | Trades | Quote volume | Window age s | Reason |",
+        "|---|---|---|---:|---|---:|---:|---:|---|",
+    ])
     for item in report.get("market_results", []):
-        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} |".format(
+        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
             item.get("symbol"), item.get("contract_type"), item.get("underlying_type"),
-            item.get("return_24h_pct", ""), item.get("valid"), item.get("reason") or "",
-            item.get("current_price_age_seconds", ""), item.get("reference_gap_seconds", "")))
-    lines.extend(["", "A provisional leader is not a complete ranking unless all accepted contracts pass freshness checks.",
-        "Stock perps remain tradable 24/7, but index and mark references can behave differently while cash markets are closed.",
-        "This diagnostic does not create portfolio state, paper fills, NAV, or exchange orders.", ""])
+            item.get("return_24h_pct") or "", item.get("valid"), item.get("trade_count"),
+            item.get("quote_volume") or "", item.get("ticker_window_age_seconds"),
+            item.get("reason") or "",
+        ))
+    lines.extend([
+        "",
+        "The 24-hour percentage is Binance's reported priceChangePercent, not a locally recomputed return.",
+        "The ticker response includes rolling-window timestamps and a 24-hour trade count, but does not include an exact last-trade timestamp. Window freshness therefore does not prove that the last trade itself occurred within the last 15 minutes.",
+        "A missing ticker row, invalid price/change, zero trade count, or stale ticker window makes coverage incomplete.",
+        "This diagnostic does not create portfolio state, paper fills, NAV, or exchange orders.",
+        "",
+    ])
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", default="artifacts/binance-ranking-preflight")
-    parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args(argv)
-    if not 1 <= args.workers <= 8:
-        parser.error("--workers must be between 1 and 8")
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    report = run_ranking_preflight(max_workers=args.workers)
-    (out / "binance_ranking_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    (out / "binance_ranking_report.md").write_text(render_markdown(report), encoding="utf-8")
-    summary = {"gates": report["gates"], "coverage": report["coverage"],
-        "provisional_leaders": {k: (v.get("symbol"), v.get("return_24h_pct")) if v else None
-            for k, v in report["provisional_leaders"].items() if k.startswith("provisional_")}}
+    report = run_ranking_preflight()
+    (out / "binance_ranking_report.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    (out / "binance_ranking_report.md").write_text(
+        render_markdown(report), encoding="utf-8"
+    )
+    summary = {
+        "gates": report["gates"],
+        "coverage": report["coverage"],
+        "provisional_leaders": {
+            key: (value.get("symbol"), value.get("return_24h_pct")) if value else None
+            for key, value in report["provisional_leaders"].items()
+            if key.startswith("provisional_")
+        },
+    }
     print(json.dumps(summary, indent=2))
     return 0 if report["gates"]["ranking_diagnostic"] == "PASS" else 1
 
