@@ -20,7 +20,7 @@ from .rankings import (
 def run_ranking_preflight() -> dict[str, Any]:
     started = datetime.now(timezone.utc)
     report: dict[str, Any] = {
-        "report_version": 3,
+        "report_version": 4,
         "project": "binance_stocks_vs_crypto",
         "run_at_utc": started.isoformat().replace("+00:00", "Z"),
         "runner": {
@@ -67,7 +67,7 @@ def run_ranking_preflight() -> dict[str, Any]:
             "no_credentials": True,
             "no_private_account_endpoints": True,
             "no_order_endpoints": True,
-            "no_positions_or_portfolio_state": True,
+            "ranking_diagnostic_does_not_update_portfolio_state": True,
             "no_external_price_or_taxonomy_provider": True,
             "meme_classification_uses_exchange_metadata_only": True,
         },
@@ -156,6 +156,7 @@ def run_ranking_preflight() -> dict[str, Any]:
             "underlying_sub_type": market.get("underlyingSubType"),
             "quote_asset": market.get("quoteAsset"),
             "margin_asset": market.get("marginAsset"),
+            "filters": market.get("filters", []),
         })
         results.append(result)
     results.sort(key=lambda item: item["symbol"])
@@ -204,7 +205,7 @@ def run_ranking_preflight() -> dict[str, Any]:
         "complete_valid_24h_ticker_coverage": "PASS" if complete else "FAIL",
         "provisional_leaders_available": "PASS" if leaders_available else "FAIL",
         "ranking_diagnostic": "PASS" if complete and leaders_available else "INCOMPLETE",
-        "paper_trading": "NOT_IMPLEMENTED",
+        "paper_trading": "DOWNSTREAM_PAPER_PORTFOLIO_ENGINE",
         "order_submission": "NOT_PRESENT",
     }
     return report
@@ -219,7 +220,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "- Run: " + report["run_at_utc"],
         "- Binance server time (ms): " + str(info.get("as_of_server_time_ms")),
-        "- Public unauthenticated GET only; no paper positions or orders.",
+        "- Public unauthenticated GET only; this report is the ranking input for a separate paper-accounting step.",
         "- Ranking source: Binance /fapi/v1/ticker/24hr priceChangePercent.",
         "- Returns are taken directly from Binance; this workflow does not recalculate them.",
         "",
@@ -289,7 +290,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "The 24-hour percentage is Binance's reported priceChangePercent, not a locally recomputed return.",
         "The ticker response includes rolling-window timestamps and a 24-hour trade count, but does not include an exact last-trade timestamp. Window freshness therefore does not prove that the last trade itself occurred within the last 15 minutes.",
         "A missing ticker row, invalid price/change, zero trade count, or stale ticker window makes coverage incomplete.",
-        "This diagnostic does not create portfolio state, paper fills, NAV, or exchange orders.",
+        "This ranking diagnostic does not itself update portfolio state. The downstream paper engine records estimated fills and NAV only after this diagnostic passes; it never submits exchange orders.",
         "",
     ])
     return "\n".join(lines)

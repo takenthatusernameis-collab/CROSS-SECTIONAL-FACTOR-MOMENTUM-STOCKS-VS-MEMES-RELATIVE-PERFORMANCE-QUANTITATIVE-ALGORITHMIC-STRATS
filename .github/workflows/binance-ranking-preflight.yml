@@ -1,4 +1,4 @@
-name: Binance Daily Stock vs Crypto Perp Ranking Diagnostic
+name: Binance Daily Stock vs Meme Perp Paper Portfolio
 
 on:
   workflow_dispatch:
@@ -10,18 +10,25 @@ on:
       - '.github/workflows/binance-ranking-preflight.yml'
       - 'binance_stocks_vs_crypto/**'
       - 'tests/test_binance_rankings.py'
+      - 'tests/test_binance_preflight.py'
+      - 'tests/test_binance_paper_portfolio.py'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: binance-ranking-preflight-${{ github.ref }}
+  group: binance-paper-portfolio-\${{ github.repository }}
   cancel-in-progress: false
 
+env:
+  PAPER_INITIAL_NAV_USDT: \${{ vars.PAPER_INITIAL_NAV_USDT || '10000' }}
+  PAPER_LONG_TAKER_FEE_RATE: \${{ vars.PAPER_LONG_TAKER_FEE_RATE || '0.0005' }}
+  PAPER_SHORT_TAKER_FEE_RATE: \${{ vars.PAPER_SHORT_TAKER_FEE_RATE || '0.0005' }}
+
 jobs:
-  ranking-preflight:
+  daily-paper-portfolio:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,25 +41,85 @@ jobs:
       - name: Run ranking unit tests
         run: python -m unittest discover -s tests -p 'test_binance_rankings.py' -v
 
-      - name: Compile Binance package
-        run: python -m compileall -q binance_stocks_vs_crypto tests/test_binance_rankings.py
+      - name: Run public preflight unit tests
+        run: python -m unittest discover -s tests -p 'test_binance_preflight.py' -v
 
-      - name: Run full-universe public GET ranking diagnostic
+      - name: Run paper portfolio unit tests
+        run: python -m unittest discover -s tests -p 'test_binance_paper_portfolio.py' -v
+
+      - name: Compile source and tests
+        run: python -m compileall -q binance_stocks_vs_crypto tests
+
+      - name: Run full-universe Binance ranking diagnostic
         id: ranking
         shell: bash
         run: |
           set +e
-          python -m binance_stocks_vs_crypto.ranking_preflight --output-dir artifacts/binance-ranking-preflight --workers 4
+          python -m binance_stocks_vs_crypto.ranking_preflight --output-dir artifacts/binance-ranking-preflight
           result=$?
-          echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=\${result}" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Upload ranking report
+      - name: Restore persistent SQLite database
+        if: steps.ranking.outputs.exit_code == '0'
+        shell: bash
+        run: |
+          mkdir -p state
+          if git fetch origin paper-portfolio-state 2>/dev/null; then
+            if git cat-file -e FETCH_HEAD:state/paper_portfolio.sqlite3 2>/dev/null; then
+              git show FETCH_HEAD:state/paper_portfolio.sqlite3 > state/paper_portfolio.sqlite3
+            fi
+          fi
+
+      - name: Run daily paper accounting
+        id: paper
+        if: steps.ranking.outputs.exit_code == '0'
+        shell: bash
+        run: |
+          set +e
+          python -m binance_stocks_vs_crypto.paper_portfolio \
+            --ranking-report artifacts/binance-ranking-preflight/binance_ranking_report.json \
+            --db-path state/paper_portfolio.sqlite3 \
+            --output-dir artifacts/binance-paper-portfolio
+          result=$?
+          echo "exit_code=\${result}" >> "$GITHUB_OUTPUT"
+          if [ -f state/paper_portfolio.sqlite3 ]; then
+            cp state/paper_portfolio.sqlite3 artifacts/binance-paper-portfolio/paper_portfolio.sqlite3
+          fi
+          exit 0
+
+      - name: Persist SQLite database to dedicated branch
+        if: steps.paper.outputs.exit_code == '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp state/paper_portfolio.sqlite3 /tmp/paper_portfolio.sqlite3
+          rm -f state/paper_portfolio.sqlite3
+          git fetch origin main
+          if git fetch origin paper-portfolio-state 2>/dev/null; then
+            git checkout -B paper-portfolio-state origin/paper-portfolio-state
+            git merge --no-edit origin/main
+          else
+            git checkout -B paper-portfolio-state origin/main
+          fi
+          mkdir -p state
+          cp /tmp/paper_portfolio.sqlite3 state/paper_portfolio.sqlite3
+          git add state/paper_portfolio.sqlite3
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Update daily paper portfolio database"
+          fi
+          git push origin HEAD:refs/heads/paper-portfolio-state
+
+      - name: Upload ranking and paper reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: binance-ranking-preflight-${{ github.run_id }}
-          path: artifacts/binance-ranking-preflight/
+          name: binance-paper-portfolio-\${{ github.run_id }}
+          path: |
+            artifacts/binance-ranking-preflight/
+            artifacts/binance-paper-portfolio/
           if-no-files-found: warn
           retention-days: 30
 
@@ -60,7 +127,14 @@ jobs:
         if: always() && steps.ranking.outcome == 'success'
         shell: bash
         run: |
-          if [ "${{ steps.ranking.outputs.exit_code }}" != "0" ]; then
-            echo 'The ranking diagnostic found incomplete data coverage or a validation blocker. Review the uploaded report.'
+          if [ "\${{ steps.ranking.outputs.exit_code }}" != "0" ]; then
+            echo 'Ranking coverage or validation failed. Review the uploaded diagnostic.'
             exit 1
           fi
+
+      - name: Enforce paper portfolio gate
+        if: always() && steps.ranking.outputs.exit_code == '0' && steps.paper.outputs.exit_code != '0'
+        shell: bash
+        run: |
+          echo 'Paper accounting was blocked. Existing portfolio state was not committed.'
+          exit 1

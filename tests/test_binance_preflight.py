@@ -13,6 +13,7 @@ class PublicEndpointGuardTests(unittest.TestCase):
     def test_only_public_market_data_routes_are_allowlisted(self):
         self.assertIn("exchangeInfo", ALLOWED_ROUTES)
         self.assertIn("ticker/24hr", ALLOWED_ROUTES)
+        self.assertIn("fundingRate", ALLOWED_ROUTES)
         self.assertNotIn("continuousKlines", ALLOWED_ROUTES)
         self.assertNotIn("order", ALLOWED_ROUTES)
         self.assertNotIn("account", ALLOWED_ROUTES)

@@ -21,7 +21,7 @@ USER_AGENT = "binance-stocks-vs-memes-read-only-preflight/0.3"
 MAX_BYTES = 24 * 1024 * 1024
 RETRYABLE = {429, 500, 502, 503, 504}
 ALLOWED_ROUTES = frozenset({
-    "exchangeInfo", "time", "tradingSchedule", "ticker/24hr", "depth", "premiumIndex"
+    "exchangeInfo", "time", "tradingSchedule", "ticker/24hr", "depth", "premiumIndex", "fundingRate"
 })
 
 
