@@ -230,7 +230,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     if report.get("skip_reason"):
         lines.append(f"- **Skipped:** {report['skip_reason']}")
     lines.extend(["", "## Universe and coverage", "",
-        "| Measure | Count |", "|---|---:|"]
+        "| Measure | Count |", "|---|---:|"])
     ml, cov = report.get("market_list", {}), report.get("coverage", {})
     for label, value in [
         ("Active markets", ml.get("active_market_count")),
@@ -281,8 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     report = run_ranking_preflight(max_workers=args.workers)
     (out / "kalshi_ranking_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (out / "kalshi_ranking_report.md").write_text(render_markdown(report), encoding="utf-8")
-    summary = {"gates": report["gates"], "coverage": report["coverage"],
-        "equities_session": report.get("equities_session"), "coverage": report.get("coverage"),
+    summary = {"gates": report["gates"], "equities_session": report.get("equities_session"),
+        "coverage": report.get("coverage"),
         "provisional_leaders": {key: (value.get("ticker"), value.get("return_24h_pct")) if value else None
             for key, value in report.get("provisional_leaders", {}).items() if key.startswith("provisional_")}}
     print(json.dumps(summary, indent=2))
