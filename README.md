@@ -1,44 +1,63 @@
 # Stocks vs Memes — Daily Perpetual Paper Trader
 
-A local, credential-free, **paper-only** simulation of a daily market-neutral pair:
+A local, credential-free, **paper-only** simulation of a daily market-neutral Gate.io USDT perpetual pair:
 
-- At each UTC day open, long the highest trailing-24h gainer among Gate.io USDT perpetuals classified as Stocks.
-- Short the lowest trailing-24h performer among Gate.io USDT perpetuals classified as Memes.
-- Hold both legs until the UTC day close.
+- At each UTC day open, long the highest trailing-24h gainer among contracts whose exchange metadata classifies them as Stocks.
+- Short the lowest trailing-24h performer among contracts whose metadata classifies them as Memes.
+- Hold both legs until the UTC daily candle closes.
 - Default sizing is 2.0x total gross exposure: 1x NAV long plus 1x NAV short, equal USDT notional.
 
-## Download and run
+## Mandatory live preflight — do this first
 
-Download `stocks_vs_memes_workflow.zip` from this repository, extract it, then:
+Run:
+
+```bash
+svm-paper preflight
+```
+
+Exit code 0 is required. The command fetches current public Gate contract metadata and ticker data, confirms at least one active direct USDT contract in both categories with a matching valid 24-hour ticker, records all observed `contract_type` values, saves `data/live_preflight_latest.json`, and returns exit code 1 on any failure.
+
+Both `svm-paper run` and `svm-paper run --loop` enforce this gate before opening any new paper exposure. The daily entry path independently revalidates the category universe. Mock tests and documentation do not authorize trading. An already-open persisted paper session can resume to monitor or close after restart, but this exception cannot open new positions.
+
+## Current live test result (13 November 2026)
+
+**FAIL — inconclusive due to local DNS/network failure.** The terminal could not resolve `api.gateio.ws` while requesting the public contract endpoint. No live response body or category values were received, so neither Stocks nor Memes support was confirmed. The one-shot `svm-paper run` was also executed and exited with code 1 before opening a session. Paper trading is therefore blocked. See [LIVE-PREFLIGHT-ATTEMPT.md](LIVE-PREFLIGHT-ATTEMPT.md).
+
+This failure does not mean that Gate lacks the category; it means this execution environment could not reach the feed. Retry `svm-paper preflight` from a machine with working DNS and HTTPS access. Only a fresh PASS permits new paper sessions.
+
+## Category rules
+
+Use native `contract_type` metadata only. No symbol-name guessing or alternative-category substitution. Only conservative exact aliases `stock`/`stocks` and `meme`/`memes` are enabled by default in `config/strategy.json`. Do not add aliases unless a live exchange response or authoritative Gate documentation confirms the exact value.
+
+Gate's current API documentation defines `contract_type` as a contract classification and gives examples including `stocks`, metals, indices, forex, and commodities, but does not enumerate Meme values. Gate's official Futures Meme Zone announcement proves that the product category exists, not which `contract_type` string the public API returns.
+
+## Simulation details
+
+Uses public GET market-data endpoints only. No API keys, secrets, private account endpoints, testnet, paid services, or real order placement. Simulates book-depth VWAP fills, taker fees, funding settlements, spread/market-impact slippage, minute mark-to-market equity, normalized ratio drift, ROI, and maximum drawdown. Execution costs are embedded in fill prices and are not deducted twice.
+
+SQLite state is local. Daily reports are exported to JSON, CSV, Markdown, and SVG. Drawdown uses one-minute mark candles plus entry/exit points and does not capture intraminute extremes.
+
+## Install and run
+
+Download and extract `stocks_vs_memes_workflow.zip` from this repository, then:
 
 ```bash
 python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 # Windows PowerShell: .venv\\Scripts\\Activate.ps1
 pip install -e .
-svm-paper universe
+svm-paper preflight
 svm-paper run --loop
 ```
 
-Use `svm-paper status` and `svm-paper report --date YYYY-MM-DD` for the local results.
-
-## Category verification is mandatory
-
-The Gate public contract endpoint exposes a `contract_type` field and documents `stocks` as an example. Gate also currently operates an official Futures Meme Zone, but the public API docs do not enumerate the precise `contract_type` string used by every Meme Zone contract. Run `svm-paper universe` to inspect actual values. The software uses exact category aliases from `config/strategy.json`, never guesses from ticker names, and skips the session if either category cannot be established.
-
-Official Gate references:
-- [Futures contract metadata](https://www.gate.com/docs/developers/apiv4/en/futures/)
-- [Ticker statistics and 24h change percentage](https://www.gate.com/docs/developers/apiv4/en/futures/)
-- [Order-book depth](https://www.gate.com/docs/developers/apiv4/en/futures/)
-- [Historical funding rates](https://www.gate.com/docs/developers/apiv4/en/futures/)
-- [Gate Futures Meme Zone announcement, 9 Nov 2026](https://www.gate.com/announcements/article/102676)
-
-## Simulation details
-
-Uses only public GET market-data endpoints. No API keys, secrets, private account endpoints, testnet, or real orders. It simulates book-depth VWAP fills, exchange taker fees, mark-price funding settlements, spread/market impact, minute mark-to-market equity, normalized ratio drift, ROI, and maximum drawdown. Execution costs are embedded in fill prices and are not double deducted.
-
-SQLite state is local. Daily reports are exported to JSON, CSV, Markdown, and SVG. Drawdown is sampled from one-minute mark candles plus entry/exit points; it does not capture intraminute extremes. The full README, frozen strategy prompt, Python source, configuration, and tests are included in the ZIP.
+Other commands: `svm-paper universe` (same strict live check), `svm-paper status`, and `svm-paper report --date YYYY-MM-DD`.
 
 ## Validation
 
-The current local build passes 17 unit/integration tests and Python compile checks. Tests include a complete simulated day using fake market data; those fixture results are not live exchange performance. Live Gate connectivity and Meme Zone classification must be validated on the machine running the workflow.
+The current local build passes 20 unit/integration tests and Python compile checks. Tests include mocked positive and negative feed cases, explicit runner blocking when either category is missing, network-error blocking, and a complete fixture-based daily session. Mock fixture performance is not live exchange performance and does not satisfy the live preflight.
+
+## Official Gate references
+
+- [Gate API v4 access URLs](https://www.gate.com/docs/developers/apiv4/en/)
+- [USDT Futures contract endpoint and `contract_type` schema](https://www.gate.com/docs/developers/apiv4/en/futures/)
+- [Gate Futures Meme Zone announcement, 9 November 2026](https://www.gate.com/announcements/article/102676)
