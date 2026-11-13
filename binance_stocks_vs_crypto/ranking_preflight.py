@@ -17,6 +17,118 @@ from .rankings import (
 )
 
 
+class RankingRequestError(RuntimeError):
+    """Identify which public Binance request failed during ranking preflight."""
+
+    def __init__(self, endpoint: str, cause: Exception) -> None:
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.endpoint = endpoint
+        self.cause = cause
+
+
+def request_ranking_json(endpoint: str) -> tuple[Any, dict[str, Any]]:
+    try:
+        return request_json(endpoint)
+    except Exception as exc:
+        raise RankingRequestError(endpoint, exc) from exc
+
+
+def build_failure_report(exc: Exception) -> dict[str, Any]:
+    """Build an artifact-safe failure report when the live API cannot be queried."""
+    cause = exc.cause if isinstance(exc, RankingRequestError) else exc
+    endpoint = exc.endpoint if isinstance(exc, RankingRequestError) else None
+    status = getattr(cause, "status", getattr(exc, "status", None))
+    message = str(cause)
+    if status == 451:
+        diagnosis = (
+            "Binance returned HTTP 451 and stated that the service is unavailable "
+            "from this location under its eligibility terms. No location restriction "
+            "was bypassed and no paper accounting was attempted."
+        )
+        recommended_action = (
+            "Review Binance eligibility and use only a runner location where the "
+            "public market-data service is permitted."
+        )
+    elif status == 429:
+        diagnosis = "Binance rate-limited the public market-data request."
+        recommended_action = "Review request cadence and Binance rate-limit guidance."
+    elif status is not None:
+        diagnosis = f"Binance or an upstream HTTP service returned status {status}."
+        recommended_action = "Review the HTTP response and retry only after the underlying issue is resolved."
+    else:
+        diagnosis = "The public market-data request failed before a valid response was available."
+        recommended_action = "Review network connectivity, DNS, TLS, and the runner's access to Binance."
+    return {
+        "report_version": 5,
+        "project": "binance_stocks_vs_crypto",
+        "status": "FAILED",
+        "run_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "runner": {
+            "os": platform.platform(),
+            "python": platform.python_version(),
+            "github_runner_os": os.getenv("RUNNER_OS"),
+            "github_run_id": os.getenv("GITHUB_RUN_ID"),
+            "github_run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
+            "github_sha": os.getenv("GITHUB_SHA"),
+            "github_ref": os.getenv("GITHUB_REF"),
+        },
+        "api": {
+            "base_url": BASE_URL,
+            "methods": ["GET"],
+            "authentication": "none",
+            "market_data_provider": "Binance USD-M Futures only",
+            "failed_endpoint": endpoint,
+            "ranking_endpoint": "/fapi/v1/ticker/24hr",
+            "ranking_request_count": 1,
+        },
+        "failure": {
+            "stage": endpoint or "ranking_preflight",
+            "exception_type": type(cause).__name__,
+            "http_status": status,
+            "message": message[:1200],
+            "diagnosis": diagnosis,
+            "recommended_action": recommended_action,
+            "paper_accounting_attempted": False,
+            "portfolio_state_changed": False,
+        },
+        "strategy_scope": {
+            "long_contract_type": "TRADIFI_PERPETUAL",
+            "short_contract_type": "PERPETUAL",
+            "short_underlying_type": "COIN",
+            "short_required_underlying_subtype": MEME_UNDERLYING_SUBTYPE,
+            "quote_and_margin_asset": "USDT",
+            "long_notional": "1x NAV",
+            "short_notional": "1x NAV",
+            "gross_exposure": "2x NAV",
+            "paper_positions_created": False,
+        },
+        "exchange_info": {},
+        "ticker_report": {},
+        "coverage": {},
+        "provisional_leaders": {},
+        "market_results": [],
+        "gates": {
+            "exchange_info_discovery": "NOT_EVALUATED",
+            "accepted_stock_and_meme_universes": "NOT_EVALUATED",
+            "binance_24h_ticker_report_retrieval": "FAIL",
+            "complete_valid_24h_ticker_coverage": "NOT_EVALUATED",
+            "provisional_leaders_available": "NOT_EVALUATED",
+            "ranking_diagnostic": "FAIL",
+            "paper_trading": "BLOCKED",
+            "order_submission": "NOT_PRESENT",
+        },
+        "safety_assertions": {
+            "public_get_only": True,
+            "no_credentials": True,
+            "no_private_account_endpoints": True,
+            "no_order_endpoints": True,
+            "ranking_diagnostic_does_not_update_portfolio_state": True,
+            "no_external_price_or_taxonomy_provider": True,
+            "meme_classification_uses_exchange_metadata_only": True,
+        },
+    }
+
+
 def run_ranking_preflight() -> dict[str, Any]:
     started = datetime.now(timezone.utc)
     report: dict[str, Any] = {
@@ -73,18 +185,18 @@ def run_ranking_preflight() -> dict[str, Any]:
         },
     }
 
-    exchange_payload, exchange_meta = request_json("exchangeInfo")
+    exchange_payload, exchange_meta = request_ranking_json("exchangeInfo")
     symbols = exchange_payload.get("symbols") if isinstance(exchange_payload, dict) else None
     if not isinstance(symbols, list) or any(not isinstance(item, dict) for item in symbols):
         raise ValueError("GET /fapi/v1/exchangeInfo did not return a symbols array")
     universe = classify_binance_universe(symbols)
 
-    server_payload, server_meta = request_json("time")
+    server_payload, server_meta = request_ranking_json("time")
     as_of_ms = server_payload.get("serverTime") if isinstance(server_payload, dict) else None
     if isinstance(as_of_ms, bool) or not isinstance(as_of_ms, int):
         raise ValueError("GET /fapi/v1/time did not return integer serverTime")
 
-    ticker_payload, ticker_meta = request_json("ticker/24hr")
+    ticker_payload, ticker_meta = request_ranking_json("ticker/24hr")
     ticker_records = parse_binance_24h_tickers(ticker_payload, as_of_ms=as_of_ms)
 
     counts: dict[str, int] = {}
@@ -250,6 +362,22 @@ def render_markdown(report: dict[str, Any]) -> str:
         "| Gate | Status |",
         "|---|---|",
     ]
+    failure = report.get("failure")
+    if failure:
+        lines.extend([
+            "",
+            "## API / execution failure",
+            "",
+            "- Failed stage: " + str(failure.get("stage")),
+            "- Exception: " + str(failure.get("exception_type")),
+            "- HTTP status: " + str(failure.get("http_status")),
+            "- Message: " + str(failure.get("message", "")).replace("|", "/").replace("\\n", " "),
+            "- Diagnosis: " + str(failure.get("diagnosis", "")),
+            "- Recommended action: " + str(failure.get("recommended_action", "")),
+            "- Paper accounting attempted: " + str(failure.get("paper_accounting_attempted")),
+            "- Portfolio state changed: " + str(failure.get("portfolio_state_changed")),
+        ])
+    lines.extend(["", "## Gates", "", "| Gate | Status |", "|---|---|"])
     lines.extend("| " + key + " | " + value + " |" for key, value in report.get("gates", {}).items())
     lines.extend(["", "## Provisional leaders", ""])
     for label, key in [
@@ -302,7 +430,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    report = run_ranking_preflight()
+    try:
+        report = run_ranking_preflight()
+    except Exception as exc:
+        report = build_failure_report(exc)
     (out / "binance_ranking_report.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
@@ -310,16 +441,18 @@ def main(argv: list[str] | None = None) -> int:
         render_markdown(report), encoding="utf-8"
     )
     summary = {
-        "gates": report["gates"],
-        "coverage": report["coverage"],
+        "status": report.get("status", "COMPLETE"),
+        "gates": report.get("gates", {}),
+        "coverage": report.get("coverage", {}),
+        "failure": report.get("failure"),
         "provisional_leaders": {
             key: (value.get("symbol"), value.get("return_24h_pct")) if value else None
-            for key, value in report["provisional_leaders"].items()
+            for key, value in report.get("provisional_leaders", {}).items()
             if key.startswith("provisional_")
         },
     }
     print(json.dumps(summary, indent=2))
-    return 0 if report["gates"]["ranking_diagnostic"] == "PASS" else 1
+    return 0 if report.get("gates", {}).get("ranking_diagnostic") == "PASS" else 1
 
 
 if __name__ == "__main__":

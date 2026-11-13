@@ -82,17 +82,22 @@ jobs:
             --db-path state/paper_portfolio.sqlite3 \
             --output-dir artifacts/binance-paper-portfolio
           result=$?
-          echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
-          if [ -f state/paper_portfolio.sqlite3 ]; then
+          if [ -s state/paper_portfolio.sqlite3 ]; then
+            mkdir -p artifacts/binance-paper-portfolio
             cp state/paper_portfolio.sqlite3 artifacts/binance-paper-portfolio/paper_portfolio.sqlite3
+          elif [ "$result" -eq 0 ]; then
+            echo "ERROR: Paper accounting returned success but did not create a non-empty SQLite database." >&2
+            result=1
           fi
+          echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Persist SQLite database to dedicated branch
-        if: steps.paper.outputs.exit_code == '0'
+        if: steps.paper.outcome == 'success' && steps.paper.outputs.exit_code == '0' && hashFiles('state/paper_portfolio.sqlite3') != ''
         shell: bash
         run: |
           set -euo pipefail
+          test -s state/paper_portfolio.sqlite3
           cp state/paper_portfolio.sqlite3 /tmp/paper_portfolio.sqlite3
           rm -f state/paper_portfolio.sqlite3
           git fetch origin main

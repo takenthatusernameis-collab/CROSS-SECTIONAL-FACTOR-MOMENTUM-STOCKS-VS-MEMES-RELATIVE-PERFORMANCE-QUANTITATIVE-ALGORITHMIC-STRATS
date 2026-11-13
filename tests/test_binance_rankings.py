@@ -1,5 +1,12 @@
+import json
+import tempfile
 import unittest
 from decimal import Decimal
+from pathlib import Path
+from unittest.mock import patch
+
+from binance_stocks_vs_crypto import ranking_preflight
+from binance_stocks_vs_crypto.preflight import ApiError
 
 from binance_stocks_vs_crypto.rankings import (
     build_provisional_leaders,
@@ -180,6 +187,39 @@ class TickerTests(unittest.TestCase):
         self.assertEqual(leaders["provisional_long_leader"]["symbol"], "STOCK2")
         self.assertEqual(leaders["provisional_meme_short_leader"]["symbol"], "DOGE")
         self.assertEqual(leaders["meme_valid_count"], 2)
+
+
+
+class RankingFailureArtifactTests(unittest.TestCase):
+    def test_http_451_writes_structured_json_and_markdown_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(
+                ranking_preflight,
+                "request_json",
+                side_effect=ApiError(
+                    "HTTP 451: Service unavailable from a restricted location", 451
+                ),
+            ):
+                exit_code = ranking_preflight.main(["--output-dir", tmp])
+
+            self.assertEqual(exit_code, 1)
+            json_path = Path(tmp) / "binance_ranking_report.json"
+            markdown_path = Path(tmp) / "binance_ranking_report.md"
+            self.assertTrue(json_path.is_file())
+            self.assertTrue(markdown_path.is_file())
+
+            report = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "FAILED")
+            self.assertEqual(report["failure"]["stage"], "exchangeInfo")
+            self.assertEqual(report["failure"]["http_status"], 451)
+            self.assertFalse(report["failure"]["paper_accounting_attempted"])
+            self.assertEqual(report["gates"]["ranking_diagnostic"], "FAIL")
+            self.assertEqual(report["gates"]["paper_trading"], "BLOCKED")
+
+            markdown = markdown_path.read_text(encoding="utf-8")
+            self.assertIn("API / execution failure", markdown)
+            self.assertIn("451", markdown)
+            self.assertIn("restricted location", markdown)
 
 
 if __name__ == "__main__":
