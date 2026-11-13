@@ -28,7 +28,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: false
 
       - name: Run deterministic preflight unit tests
         run: python -m unittest discover -s tests -p 'test_kalshi_preflight.py' -v
