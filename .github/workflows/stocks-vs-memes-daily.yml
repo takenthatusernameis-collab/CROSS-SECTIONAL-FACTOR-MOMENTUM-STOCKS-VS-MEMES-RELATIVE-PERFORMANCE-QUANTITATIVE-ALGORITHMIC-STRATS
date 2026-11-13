@@ -1,0 +1,127 @@
+name: Stocks vs Memes — Daily UTC Paper Runner
+
+on:
+  # Start shortly before the daily candle boundary, then wait for 00:00 UTC.
+  # A non-zero minute avoids GitHub's documented top-of-hour scheduler load.
+  schedule:
+    - cron: "58 23 * * *"
+  # Manual runs are diagnostic-only; they never open or change paper positions.
+  workflow_dispatch:
+
+concurrency:
+  group: stocks-vs-memes-daily-paper
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  daily-paper:
+    name: Ubuntu daily paper session
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TZ: UTC
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Create persistence directories
+        run: mkdir -p data reports
+
+      - name: Restore latest scheduled paper-state artifact
+        if: github.event_name == 'schedule'
+        id: restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          RESTORE_DIR="$RUNNER_TEMP/svm-paper-restore"
+          mkdir -p "$RESTORE_DIR"
+          PREVIOUS_RUN_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/stocks-vs-memes-daily.yml/runs?branch=main&event=schedule&status=completed&per_page=1" --jq '.workflow_runs[0].id // ""')"
+
+          if [ -z "$PREVIOUS_RUN_ID" ]; then
+            echo "No prior scheduled runner found; bootstrapping from configured initial equity."
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! gh run download "$PREVIOUS_RUN_ID" --repo "$GITHUB_REPOSITORY" --name stocks-vs-memes-paper-state --dir "$RESTORE_DIR"; then
+            echo "ERROR: Previous scheduled run $PREVIOUS_RUN_ID has no downloadable state artifact. Refusing to reset SQLite or start an untracked session." >&2
+            exit 1
+          fi
+          if [ ! -d "$RESTORE_DIR/data" ]; then
+            echo "ERROR: Previous state artifact is missing its data directory." >&2
+            exit 1
+          fi
+          cp -a "$RESTORE_DIR/data/." data/
+          if [ -d "$RESTORE_DIR/reports" ]; then cp -a "$RESTORE_DIR/reports/." reports/; fi
+          echo "Restored state from scheduled run $PREVIOUS_RUN_ID."
+          echo "restored=true" >> "$GITHUB_OUTPUT"
+
+      - name: Validate restored SQLite state
+        id: state_validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import sqlite3
+          paths = glob.glob("data/*.sqlite3")
+          if not paths:
+              print("No prior SQLite database: fresh bootstrap or no prior paper entry.")
+          for path in paths:
+              con = sqlite3.connect(path)
+              try:
+                  result = con.execute("PRAGMA integrity_check").fetchone()[0]
+                  if result != "ok":
+                      raise SystemExit(f"SQLite integrity check failed for {path}: {result}")
+                  tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                  if "days" not in tables:
+                      raise SystemExit(f"Restored database {path} does not contain the expected paper-session table.")
+                  print(f"Restored SQLite state validated: {path}")
+              finally:
+                  con.close()
+          PY
+
+      - name: Run deterministic tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Compile workflow source
+        run: python -m compileall -q stocks_vs_memes tests
+
+      - name: Diagnostic-only manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: python -m stocks_vs_memes.cli preflight
+
+      - name: Wait for UTC midnight and process exactly one daily boundary
+        if: github.event_name == 'schedule'
+        run: python -m stocks_vs_memes.cli run --scheduled-once
+
+      - name: Show persisted paper status
+        if: always()
+        run: python -m stocks_vs_memes.cli status || true
+
+      - name: Persist SQLite state and reports for the next daily runner
+        if: always() && github.event_name == 'schedule' && steps.state_validation.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: stocks-vs-memes-paper-state
+          path: |
+            data/
+            reports/
+          if-no-files-found: warn
+          retention-days: 90
+          compression-level: 6

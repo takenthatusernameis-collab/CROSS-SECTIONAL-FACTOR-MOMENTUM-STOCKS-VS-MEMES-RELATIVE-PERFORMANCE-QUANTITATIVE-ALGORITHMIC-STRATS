@@ -10,12 +10,13 @@
   "initial_equity_usdt": 10000,
   "taker_fee_rate": 0.00055,
   "orderbook_levels": 100,
-  "entry_grace_seconds": 45,
+  "entry_grace_seconds": 900,
   "minimum_mark_coverage": 1,
   "request_timeout_seconds": 20,
   "max_retries": 2,
   "bybit_base_url": "https://api.bybit.com",
   "cmc_base_url": "https://pro-api.coinmarketcap.com/public-api",
   "data_dir": "data",
-  "reports_dir": "reports"
+  "reports_dir": "reports",
+  "scheduled_lead_window_seconds": 600
 }

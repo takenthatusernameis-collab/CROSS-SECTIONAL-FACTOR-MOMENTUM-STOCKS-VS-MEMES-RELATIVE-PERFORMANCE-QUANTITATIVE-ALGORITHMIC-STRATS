@@ -60,3 +60,12 @@ Entry/exit are simulated by sweeping public order-book depth for VWAP. Incomplet
 ## Tests
 
 `python -m unittest discover -s tests -v` currently passes **29 deterministic unit/integration tests**. `python -m compileall -q stocks_vs_memes tests` passes. Tests use fake market responses and prove code behavior only; they are not live source confirmation or evidence of strategy profitability.
+
+
+## GitHub Actions Ubuntu runner
+
+The repository includes `.github/workflows/stocks-vs-memes-daily.yml`. It is scheduled daily at **23:58 UTC**, starts on GitHub-hosted `ubuntu-latest`, waits until 00:00 UTC, and invokes the strategy exactly once for that UTC trading-day boundary. Scheduling before midnight lets the runner sleep through the boundary; if GitHub queues the job until shortly after midnight, a 15-minute late-start grace is allowed. Beyond that window, the run records a missed-boundary skip without ranking or opening a position. The strategy itself remains boundary-only.
+
+The job also supports manual `workflow_dispatch`, but this runs **diagnostic preflight only** and cannot create a position. The scheduled job restores the prior scheduled run's `stocks-vs-memes-paper-state` artifact, validates SQLite integrity, runs tests and compile checks, runs the one-shot boundary handler, then uploads `data/` and `reports/` again with 90-day retention. If a previous scheduled run exists but its state artifact is missing or invalid, the job aborts instead of resetting the local database and opening an untracked session. GitHub-hosted virtual machines are ephemeral, so this artifact handoff is required for SQLite position/equity history to survive between days.
+
+GitHub documents that scheduled runs use UTC by default, execute from the default branch, and may be delayed or dropped during high load; the 23:58 schedule intentionally avoids the top of the hour. Public repositories may have scheduled workflows disabled after 60 days without repository activity, so check Actions remains enabled. A schedule event is not proof that the runner started on time. The workflow has not yet completed its first hosted Ubuntu run, so Ubuntu DNS access and live Bybit/CMC category verification remain unconfirmed.

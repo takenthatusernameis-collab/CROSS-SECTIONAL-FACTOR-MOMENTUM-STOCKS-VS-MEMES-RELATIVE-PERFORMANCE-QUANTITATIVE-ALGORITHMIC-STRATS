@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import json
 
 from stocks_vs_memes.bybit import BybitClient
@@ -295,6 +295,60 @@ class BybitDailyWorkflowTests(unittest.TestCase):
             self.assertGreater(bybit.instrument_calls,0); self.assertEqual(bybit.book_calls,0)
             self.assertIsNone(store.get_open_day()); self.assertEqual(store.get_day("2026-01-01")["status"],"SKIPPED")
             store.close()
+
+
+class GitHubScheduledRunnerTests(unittest.TestCase):
+    def _bare_trader(self):
+        trader = BybitDailyTrader.__new__(BybitDailyTrader)
+        trader.entry_grace = 900
+        trader.config = {"scheduled_lead_window_seconds": 600}
+        trader.store = Mock()
+        trader.store.get_day.return_value = None
+        trader.store.get_open_day.return_value = None
+        return trader
+
+    def test_scheduled_runner_waits_until_next_utc_midnight_and_runs_once(self):
+        times = [
+            datetime(2026, 1, 1, 23, 58, 0, tzinfo=timezone.utc),
+            datetime(2026, 1, 1, 23, 58, 0, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc),
+        ]
+        class SequenceDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return times.pop(0)
+        trader = self._bare_trader()
+        calls = []
+        trader.process_daily_open = lambda now: calls.append(now) or "processed one boundary"
+        with patch("stocks_vs_memes.daily_trader.datetime", SequenceDateTime), patch("stocks_vs_memes.daily_trader.time.sleep") as sleeper:
+            result = trader.run_scheduled_once()
+        self.assertEqual(result, "processed one boundary")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], datetime(2026, 1, 2, 0, 0, 1, tzinfo=timezone.utc))
+        self.assertEqual(sleeper.call_count, 1)
+        self.assertGreaterEqual(sleeper.call_args.args[0], 119)
+
+    def test_scheduled_runner_accepts_github_queue_delay_inside_grace(self):
+        now = datetime(2026, 1, 2, 0, 7, 0, tzinfo=timezone.utc)
+        trader = self._bare_trader()
+        calls = []
+        trader.process_daily_open = lambda passed: calls.append(passed) or "processed current boundary"
+        self.assertEqual(trader.run_scheduled_once(now), "processed current boundary")
+        self.assertEqual(calls, [now])
+
+    def test_scheduled_runner_skips_after_grace_without_market_actions(self):
+        now = datetime(2026, 1, 2, 0, 16, 0, tzinfo=timezone.utc)
+        trader = self._bare_trader()
+        calls = []
+        trader.process_daily_open = lambda passed: calls.append(passed) or "should not run"
+        result = trader.run_scheduled_once(now)
+        self.assertIn("missed UTC daily-open window", result)
+        self.assertEqual(calls, [])
+        trader.store.create_day.assert_called_once()
+        trader.store.update_status.assert_called_once_with("2026-01-02", "SKIPPED", unittest.mock.ANY)
+
+
 
 
 if __name__ == "__main__":

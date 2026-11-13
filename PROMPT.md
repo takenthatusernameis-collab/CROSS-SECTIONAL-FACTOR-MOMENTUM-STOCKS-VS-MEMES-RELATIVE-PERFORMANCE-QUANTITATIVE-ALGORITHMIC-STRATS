@@ -59,3 +59,12 @@ Use public GET only. No secrets, API keys, private account endpoints, testnet, p
 Test keyless GET behavior, Bybit instrument pagination and native stock type, CMC category pagination and ID-map ambiguity, ranking, equal-notional sizing, VWAP, fees, funding, ratio OHLC, ROI from close/open, drawdown from low/open, cumulative MDD, portfolio ROI, UTC boundaries, zero intraday actions, close-then-open order, skip conditions and restart persistence.
 
 Mock tests prove program behavior only. A live preflight must confirm both data sources and matching current tradable contracts; a manual preflight never authorizes a strategy entry. Keep the strategy frozen and paper-only.
+
+
+## Scheduled GitHub Actions runner
+
+Deploy the strategy as a GitHub-hosted Ubuntu scheduled workflow, not as a permanently running ChatGPT terminal process. Trigger once daily at 23:58 UTC, wait until UTC midnight, and invoke exactly one daily boundary operation. The run may process the current day's open if GitHub starts it up to 15 minutes after midnight; beyond that grace it must close any overdue persisted paper session at its first available public book, record the actual delayed exit, then skip the current day's new entry. Never open a late pair. A scheduled run must never loop, poll markets intraday, or run a second strategy event in the same UTC date.
+
+Manual `workflow_dispatch` is diagnostic-only and calls live preflight without ranking, calculating strategy performance, or changing positions. Restore the latest prior scheduled-run state artifact before running; validate the SQLite database; execute automated tests/compile checks; then, on scheduled events only, run `python -m stocks_vs_memes.cli run --scheduled-once`. Always upload the updated SQLite database and report directory as a uniquely scoped per-run Actions artifact (90-day retention). The GITHUB_TOKEN requires read access to Actions artifacts; no exchange credentials or API secrets are required.
+
+Use concurrency to prevent overlapping daily sessions. If no prior scheduled state artifact can be found, start only from configured initial equity and clearly log that it is a first run. If a previous scheduled run exists but its state artifact cannot be downloaded or fails SQLite integrity, abort safely instead of resetting state. GitHub schedule delays/dropped events must be exposed as missed-boundary skips, never compensated with an intraday entry.

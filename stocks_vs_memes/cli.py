@@ -25,7 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("preflight", help="Read-only live verification of Bybit stock perpetuals and CMC Memes mappings")
     sub.add_parser("universe", help="Alias for the strict live source preflight")
     run = sub.add_parser("run", help="Process one UTC daily open or run the boundary-only scheduler")
-    run.add_argument("--loop", action="store_true", help="Sleep until UTC daily opens; no intraday polling or actions")
+    run.add_argument("--loop", action="store_true", help="Run the standalone always-on UTC daily-boundary scheduler")
+    run.add_argument("--scheduled-once", action="store_true", help="For GitHub Actions: wait for the next UTC midnight if launched shortly before it, then process exactly one daily boundary")
     sub.add_parser("status", help="Show recent local daily sessions")
     report = sub.add_parser("report", help="Print one saved daily report")
     report.add_argument("--date", default=None, help="UTC date YYYY-MM-DD; defaults to latest completed day")
@@ -41,8 +42,12 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result.get("passed") else 1
         if args.command == "run":
+            if args.loop and args.scheduled_once:
+                raise ValueError("Choose only one of --loop or --scheduled-once")
             if args.loop:
                 trader.run_loop()
+            elif args.scheduled_once:
+                print(trader.run_scheduled_once())
             else:
                 print(trader.process_once())
             return 0

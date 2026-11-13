@@ -223,7 +223,8 @@ class BybitDailyTrader:
         slip = adverse_slippage_usdt(pos, fill, True)
         return pos, fill, slip
 
-    def _close_previous(self, day: dict[str, Any], boundary: datetime) -> dict[str, Any]:
+    def _close_previous(self, day: dict[str, Any], boundary: datetime, execution_time: datetime | None = None) -> dict[str, Any]:
+        execution_time = (execution_time or boundary).astimezone(timezone.utc)
         payload = day["payload"]
         long_pos = Position(**payload["positions"]["long"])
         short_pos = Position(**payload["positions"]["short"])
@@ -283,7 +284,9 @@ class BybitDailyTrader:
             "strategy": "stocks-vs-memes-daily-market-neutral", "paper_only": True,
             "daily_open_utc": datetime.fromtimestamp(start_ts, timezone.utc).isoformat(),
             "daily_close_utc": datetime.fromtimestamp(end_ts, timezone.utc).isoformat(),
-            "performance_computed_at_utc": boundary.isoformat(),
+            "performance_computed_at_utc": execution_time.isoformat(),
+            "actual_exit_execution_utc": execution_time.isoformat(),
+            "exit_execution_delay_seconds": max(0.0, execution_time.timestamp() - end_ts),
             "long_symbol": long_pos.contract, "short_symbol": short_pos.contract,
             "long_category": "stocks", "short_category": "memes",
             "long_selection_change_24h_pct": long_pos.selection_change_pct,
@@ -416,7 +419,7 @@ class BybitDailyTrader:
                     "refusing an off-schedule position change"
                 )
             try:
-                self._close_previous(previous, day_start)
+                self._close_previous(previous, day_start, now)
             except Exception as exc:
                 self.store.update_status(previous["utc_date"], "CLOSE_PENDING", f"{type(exc).__name__}: {exc}")
                 raise
@@ -440,6 +443,71 @@ class BybitDailyTrader:
             self.store.create_day(day_key, int(day_start.timestamp()), int(day_end.timestamp()), payload)
             self.store.update_status(day_key, "SKIPPED", payload["skip_reason"])
             return f"skipped {day_key}: {exc}"
+
+    def run_scheduled_once(self, now: datetime | None = None) -> str:
+        """Wait for UTC midnight if invoked shortly beforehand, then process once.
+
+        Designed for an ephemeral scheduled runner (GitHub Actions). The event is
+        emitted two minutes before UTC midnight. If GitHub starts the job shortly
+        after midnight, it may process the current boundary inside the configured
+        grace window. A later start is recorded as missed and never opens late.
+        """
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        now = now.astimezone(timezone.utc)
+        day_start = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+        day_end = day_start + timedelta(days=1)
+        offset = now.timestamp() - day_start.timestamp()
+        lead_window = int(self.config.get("scheduled_lead_window_seconds", 600))
+
+        if offset <= self.entry_grace:
+            return self.process_daily_open(now)
+
+        if offset >= 86400 - lead_window:
+            target = day_end
+            print(f"Scheduled runner is early; waiting for UTC daily open {target.isoformat()}")
+            while True:
+                remaining = target.timestamp() - datetime.now(timezone.utc).timestamp()
+                if remaining <= 0:
+                    break
+                time.sleep(max(0.1, remaining))
+            opened_at = datetime.now(timezone.utc)
+            if opened_at.date() != target.date():
+                return f"missed UTC boundary {target.isoformat()}; runner woke on {opened_at.isoformat()}; no strategy action"
+            return self.process_daily_open(opened_at)
+
+        # A late scheduled job must never leave yesterday's persisted paper
+        # position silently open. Close the most recent due session using its
+        # completed historical mark candle and first available public book,
+        # record the actual exit delay, and skip today's new exposure.
+        previous = self.store.get_open_day()
+        if previous:
+            scheduled_exit_ts = int(previous["exit_ts"])
+            if scheduled_exit_ts > int(now.timestamp()):
+                raise DailyBoundaryError(
+                    f"Persisted paper session {previous['utc_date']} is not due yet; refusing late-run reconciliation"
+                )
+            scheduled_boundary = datetime.fromtimestamp(scheduled_exit_ts, timezone.utc)
+            try:
+                self._close_previous(previous, scheduled_boundary, now)
+            except Exception as exc:
+                self.store.update_status(previous["utc_date"], "CLOSE_PENDING", f"{type(exc).__name__}: {exc}")
+                raise
+
+        day_key = day_start.date().isoformat()
+        if not self.store.get_day(day_key):
+            payload = {
+                "strategy": "stocks-vs-memes-daily-market-neutral", "paper_only": True,
+                "skip_reason": f"GitHub Actions runner started outside {self.entry_grace}s UTC-open grace window at {now.isoformat()}",
+                "new_exposure_opened": False, "scheduled_runner_missed_boundary": True,
+            }
+            self.store.create_day(day_key, int(day_start.timestamp()), int(day_end.timestamp()), payload)
+            self.store.update_status(day_key, "SKIPPED", payload["skip_reason"])
+        return (
+            f"missed UTC daily-open window at {now.isoformat()}; "
+            f"entry grace is {self.entry_grace}s; no market-data calls or new positions opened"
+        )
 
     def process_once(self, now: datetime | None = None) -> str:
         return self.process_daily_open(now)
