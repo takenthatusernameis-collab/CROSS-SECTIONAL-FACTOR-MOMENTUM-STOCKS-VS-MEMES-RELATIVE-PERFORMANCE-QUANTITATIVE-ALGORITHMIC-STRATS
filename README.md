@@ -11,7 +11,7 @@ Credential-free, local, paper-only simulation of a daily market-neutral pair usi
 
 Run `svm-paper preflight` on a network with working DNS and HTTPS. It independently checks Bybit and CoinMarketCap, then verifies the stock and meme contracts map to current Bybit tickers. A PASS proves the data sources are ready but does **not** authorize or execute a trade. Only the scheduled UTC daily-open handler can rank and open a simulated session.
 
-**Latest recorded live attempt (2026-11-13 05:24:58 UTC): FAIL / inconclusive.** DNS resolution failed independently for `api.bybit.com` and `pro-api.coinmarketcap.com`; no live category data was received. This is not evidence either provider lacks the categories. `feeds_ready=false`, `paper_trading_authorized=false`, `strategy_ranking_performed=false`. No positions were opened. See [LIVE-PREFLIGHT-ATTEMPT.md](LIVE-PREFLIGHT-ATTEMPT.md).
+**Latest recorded live attempt (2026-11-13 05:32:22 UTC): FAIL / inconclusive.** DNS resolution failed independently for `api.bybit.com` and `pro-api.coinmarketcap.com`; no live category data was received. This is not evidence either provider lacks the categories. `feeds_ready=false`, `paper_trading_authorized=false`, `strategy_ranking_performed=false`. No positions were opened. See [LIVE-PREFLIGHT-ATTEMPT.md](LIVE-PREFLIGHT-ATTEMPT.md).
 
 ## Exact daily timing and ratio metrics
 
