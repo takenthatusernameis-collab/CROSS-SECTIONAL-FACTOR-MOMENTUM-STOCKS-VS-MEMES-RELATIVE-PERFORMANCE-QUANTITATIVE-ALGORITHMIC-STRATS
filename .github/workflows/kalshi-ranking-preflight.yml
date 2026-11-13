@@ -1,0 +1,67 @@
+name: Kalshi Read-only 24h Ranking Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'kalshi_stocks_vs_crypto/rankings.py'
+      - 'kalshi_stocks_vs_crypto/ranking_preflight.py'
+      - 'kalshi_stocks_vs_crypto/README.md'
+      - 'kalshi_stocks_vs_crypto/PROMPT.md'
+      - 'tests/test_kalshi_rankings.py'
+      - '.github/workflows/kalshi-ranking-preflight.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kalshi-ranking-preflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ranking-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run ranking unit tests
+        run: python -m unittest discover -s tests -p 'test_kalshi_rankings.py' -v
+
+      - name: Compile Kalshi package
+        run: python -m compileall -q kalshi_stocks_vs_crypto tests/test_kalshi_rankings.py
+
+      - name: Run full-universe public GET ranking diagnostic
+        id: ranking
+        shell: bash
+        run: |
+          set +e
+          python -m kalshi_stocks_vs_crypto.ranking_preflight --output-dir artifacts/kalshi-ranking-preflight --workers 2
+          result=$?
+          echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload ranking diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalshi-ranking-preflight-${{ github.run_id }}
+          path: artifacts/kalshi-ranking-preflight/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce ranking data-quality gate
+        if: always() && steps.ranking.outcome == 'success'
+        shell: bash
+        run: |
+          if [ "${{ steps.ranking.outputs.exit_code }}" != "0" ]; then
+            echo 'The ranking diagnostic found incomplete data coverage or a validation blocker. Review the uploaded report.'
+            exit 1
+          fi

@@ -1,44 +1,47 @@
-# Kalshi Stocks vs Crypto — isolated research increment
+# Kalshi Equities/Indices vs Crypto — isolated research increment
 
-This directory is a separate Kalshi research namespace inside the existing repository. It does not alter the legacy stocks_vs_memes/ Bybit + CoinMarketCap implementation, its SQLite state, reports, dependencies, or daily workflow.
+This is a separate Kalshi research namespace inside the existing repository. It does not alter the legacy stocks_vs_memes/ Bybit + CoinMarketCap implementation, its SQLite state, reports, dependencies, or daily workflow.
 
-## Current scope: Stage 1 only
+## User-approved universe rule
 
-The initial increment is a **read-only public API preflight**. It performs unauthenticated HTTP GET requests against the Kalshi Perps production REST API and writes JSON and Markdown diagnostic reports. It does not rank markets, create simulated positions, persist portfolio state, or contain any order-submission code.
+The long pool contains all active Kalshi markets whose exact raw asset_class is Equities or Indices. These classes are combined into one cross-sectional ranking. The short pool contains all active Kalshi markets whose exact raw asset_class is Crypto.
 
-The only initial executable is:
+This deliberately accepts index contracts and ETFs if Kalshi places them in the accepted classes. Other classes, including Metals and Energy, are excluded. The implementation uses exact raw asset_class values and never infers category from ticker or title.
+
+## Stage 1: API preflight
+
+Run:
 
     python -m kalshi_stocks_vs_crypto.preflight --output-dir artifacts/kalshi-preflight
 
-It checks:
+Completed successfully on GitHub-hosted Ubuntu in workflow run #3. The API returned 86 active markets: 58 Equities, 2 Indices, 19 Crypto, 6 Metals, and 1 Energy. Sample market detail, order books, one-minute candles, funding estimate/history, holiday schedules, and corporate actions returned HTTP 200. The nine Stage 1 tests and compilation passed.
 
-- GET /markets?status=active
-- GET /markets/{ticker} for at most three representative tickers
-- GET /markets/{ticker}/candlesticks for a 26-hour, one-minute sample
-- GET /markets/{ticker}/orderbook
-- GET /funding_rates/estimate?ticker=...
-- GET /funding_rates/historical?ticker=...
-- GET /markets/schedules?tickers=... (required; sends a small representative ticker sample)
-- GET /corporate_actions
+## Stage 2: full-universe ranking diagnostic
 
-The requests are based on Kalshi's official Perps REST documentation. They contain no authentication headers and do not access private account, order, or trading endpoints.
+Run:
 
-## Important interpretation limits
+    python -m kalshi_stocks_vs_crypto.ranking_preflight --output-dir artifacts/kalshi-ranking-preflight --workers 2
 
-- The active market list exposes raw asset_class values and product_metadata; the program intentionally does not infer individual stocks, ETFs, indices, or crypto membership from ticker/title strings.
-- Classification is a hard blocker until actual API metadata has been reviewed and shown to separate individual common stocks from ETFs and equity indices.
-- The market-schedules endpoint requires a comma-separated list of 1–100 tickers and reports holiday closures only. Regular daily/weekend sessions must use each market's schedule data.
-- One-minute candles are sampled for endpoint/schema availability and data quality; this preflight does not calculate ranking returns.
-- A successful endpoint call does not prove the full universe is classifiable, tradable, or liquid enough for the strategy.
-- Perps production API access is documented as a member-by-member rollout. A GitHub runner result is evidence only for that environment and time.
+This stage remains read-only. It requests one-minute trade-price candles for every active market in the accepted long and short universes (79 markets based on the last preflight), calculates trailing 24-hour returns, and reports all data-quality failures plus provisional leaders.
 
-## Strategy blueprint (not implemented in this increment)
+The current completed-minute price must be no more than 15 minutes old. The reference close must be the latest valid close at or before 24 hours before the current close, and no more than 15 minutes before that reference cutoff. Actual observation timestamps, elapsed duration, and freshness gaps are reported per market.
 
-- Long: highest trailing 24-hour return among eligible individual-stock perpetuals.
-- Short: lowest trailing 24-hour return among all eligible crypto perpetuals.
-- Long notional: 1× NAV; short notional: 1× NAV; gross exposure: 2× NAV.
-- Exactly one pair and at most one rebalance attempt per eligible stock trading session.
-- No averaging, intraday reranking, ETFs, indices, metals, energy, or prediction markets.
-- Paper-only simulation; no real or demo orders.
+A provisional leader is only the best/worst result among markets with valid observations. It is not a complete cross-sectional ranking unless every market in both universes passes the freshness and reference-data checks.
 
-The first implementation stops after preflight evidence is produced. Market ranking and any paper execution engine require separate review of the API results and classification evidence.
+## Frozen portfolio parameters for later stages
+
+- Long target notional: 1× NAV.
+- Short target notional: 1× NAV.
+- Total gross exposure: 2× NAV.
+- Exactly one long and one short.
+- No averaging or intraday reranking.
+- At most one rebalance attempt per eligible Equities trading session, using Kalshi market schedules.
+- Paper-only, no live or demo orders.
+
+No paper positions, fills, portfolio state, or order-submission code are implemented in Stages 1 and 2. Later contract economics, execution, funding, margin, and schedule logic require their own validation.
+
+## Source and safety boundaries
+
+Kalshi is the only market-data provider. No CoinMarketCap, Bybit, another exchange, or external price/taxonomy provider is used by this project. Public unauthenticated GET requests only. No credentials, private-account endpoints, order endpoints, or real/demo execution code.
+
+The existing Bybit/CMC implementation and Pionex Grid Restarter remain untouched.
