@@ -41,6 +41,24 @@ class UniverseScopeTests(unittest.TestCase):
             split_active_universe([{"asset_class": "Crypto"}])
 
 
+class MarketScheduleTests(unittest.TestCase):
+    def test_schedule_summary_preserves_authoritative_market_schedule(self):
+        from kalshi_stocks_vs_crypto.ranking_preflight import schedule_summary
+
+        self.assertEqual(
+            schedule_summary({"schedule": {"is_open": False, "next_open_ts": 200, "next_close_ts": 300}}),
+            {"schedule_available": True, "is_open": False, "next_open_ts": 200, "next_close_ts": 300},
+        )
+
+    def test_missing_schedule_is_reported_as_unknown(self):
+        from kalshi_stocks_vs_crypto.ranking_preflight import schedule_summary
+
+        self.assertEqual(
+            schedule_summary({}),
+            {"schedule_available": False, "is_open": None, "next_open_ts": None, "next_close_ts": None},
+        )
+
+
 class ReturnCalculationTests(unittest.TestCase):
     def setUp(self):
         self.as_of = 200_099

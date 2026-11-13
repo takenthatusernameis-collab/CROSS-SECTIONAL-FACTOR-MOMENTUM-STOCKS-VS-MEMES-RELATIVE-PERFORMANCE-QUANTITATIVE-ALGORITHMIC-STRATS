@@ -22,6 +22,17 @@ from .rankings import (
 )
 
 
+def schedule_summary(market: dict[str, Any]) -> dict[str, Any]:
+    schedule = market.get("schedule")
+    if not isinstance(schedule, dict):
+        return {"schedule_available": False, "is_open": None,
+                "next_open_ts": None, "next_close_ts": None}
+    return {"schedule_available": True,
+            "is_open": schedule.get("is_open"),
+            "next_open_ts": schedule.get("next_open_ts"),
+            "next_close_ts": schedule.get("next_close_ts")}
+
+
 def fetch_market_candles(market: dict[str, Any], as_of_ts: int) -> dict[str, Any]:
     ticker = str(market["ticker"])
     encoded = urllib.parse.quote(ticker, safe="")
@@ -37,11 +48,11 @@ def fetch_market_candles(market: dict[str, Any], as_of_ts: int) -> dict[str, Any
             raise ValueError("Candlestick response missing a candlesticks array")
         observation = calculate_trailing_return(candles, as_of_ts)
         return {"ticker": ticker, "asset_class": market.get("asset_class"),
-                "title": market.get("title"), **observation,
+                "title": market.get("title"), "schedule": schedule_summary(market), **observation,
                 "http_status": meta["http_status"], "request_seconds": meta["elapsed_seconds"]}
     except Exception as exc:
         return {"ticker": ticker, "asset_class": market.get("asset_class"),
-                "title": market.get("title"), "valid": False,
+                "title": market.get("title"), "schedule": schedule_summary(market), "valid": False,
                 "reason": f"request_or_schema_error:{type(exc).__name__}:{exc}",
                 "http_status": getattr(exc, "status", None)}
 
@@ -93,6 +104,16 @@ def run_ranking_preflight(max_workers: int = 2) -> dict[str, Any]:
         key = str(market.get("asset_class") or "<missing>")
         excluded_counts[key] = excluded_counts.get(key, 0) + 1
 
+    schedule_counts: dict[str, dict[str, int]] = {}
+    for market in all_targets:
+        cls = str(market.get("asset_class"))
+        raw_schedule = market.get("schedule")
+        state = "unknown"
+        if isinstance(raw_schedule, dict):
+            state = "open" if raw_schedule.get("is_open") is True else "closed" if raw_schedule.get("is_open") is False else "unknown"
+        schedule_counts.setdefault(cls, {"open": 0, "closed": 0, "unknown": 0})
+        schedule_counts[cls][state] += 1
+
     report["market_list"] = {
         "http_status": market_meta["http_status"], "response_keys": sorted(market_payload),
         "cursor_present": "cursor" in market_payload, "cursor_nonempty": bool(cursor),
@@ -100,6 +121,7 @@ def run_ranking_preflight(max_workers: int = 2) -> dict[str, Any]:
         "long_equities_and_indices_count": len(universes["long"]),
         "short_crypto_count": len(universes["short"]), "excluded_count": len(universes["excluded"]),
         "excluded_class_counts": dict(sorted(excluded_counts.items())),
+        "schedule_open_counts_by_class": dict(sorted(schedule_counts.items())),
         "ranking_request_count": len(all_targets), "all_unique_tickers": True,
     }
 
@@ -182,10 +204,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         else:
             lines.append(f"- **{label}:** unavailable")
     lines.extend(["", "## Per-market data quality", "",
-        "| Ticker | Class | Return % | Valid | Reason | Current age s | Reference gap s |",
+        "| Ticker | Class | Return % | Valid | Reason | Current age s | Reference gap s | Market open |",
         "|---|---|---:|---:|---|---:|---:|"])
     for item in report.get("market_results", []):
-        lines.append(f"| {item.get('ticker')} | {item.get('asset_class')} | {item.get('return_24h_pct','')} | {item.get('valid')} | {item.get('reason') or ''} | {item.get('current_price_age_seconds','')} | {item.get('reference_gap_seconds','')} |")
+        schedule = item.get('schedule', {})
+        is_open = schedule.get('is_open')
+        lines.append(f"| {item.get('ticker')} | {item.get('asset_class')} | {item.get('return_24h_pct','')} | {item.get('valid')} | {item.get('reason') or ''} | {item.get('current_price_age_seconds','')} | {item.get('reference_gap_seconds','')} | {is_open} |")
     lines.extend(["", "## Interpretation", "",
       "A provisional leader is only the best among markets with valid data; it is not a complete cross-sectional ranking unless complete-fresh-return-coverage passes. Null closes are ignored, not replaced. Markets failing freshness or reference-window validation are unavailable.",
       "", "This diagnostic creates no portfolio state, simulated fills, paper positions, or exchange orders.", ""])
