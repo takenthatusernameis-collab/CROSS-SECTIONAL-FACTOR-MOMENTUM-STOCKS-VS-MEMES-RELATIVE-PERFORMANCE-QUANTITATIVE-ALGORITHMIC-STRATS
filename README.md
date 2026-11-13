@@ -39,7 +39,7 @@ SQLite state is local. Daily reports are exported to JSON, CSV, Markdown, and SV
 
 ## Install and run
 
-Download and extract `stocks_vs_memes_workflow.zip` from this repository, then:
+Download and extract the workflow ZIP supplied with this conversation, then:
 
 ```bash
 python -m venv .venv
