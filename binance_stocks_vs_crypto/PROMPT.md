@@ -1,23 +1,24 @@
-# Binance Stock/Index Perpetuals vs Crypto Perpetuals — frozen research directive
+# Binance Stock/Index Perpetuals vs Meme Perpetuals — frozen research directive
 
 ## Mission
 
-Maintain a read-only research workflow that dynamically discovers Binance USD-M Futures stock/index and crypto perpetuals, consumes Binance's own 24-hour ticker report, and reports the strongest stock/index and weakest crypto contracts. Keep this package self-contained.
+Maintain a read-only research workflow that dynamically discovers Binance USD-M Futures stock/index and Meme perpetuals, consumes Binance's own 24-hour ticker report, and reports the strongest stock/index and weakest Meme contracts.
 
 ## Dynamic eligible universe
 
 Refresh GET /fapi/v1/exchangeInfo on every diagnostic/rebalance cycle. Do not hardcode symbols.
 - LONG: status=TRADING, contractType=TRADIFI_PERPETUAL, quoteAsset=USDT, marginAsset=USDT, and exact underlyingType in EQUITY, CN_EQUITY, KR_EQUITY, HK_EQUITY, PREMARKET, INDEX.
-- SHORT: status=TRADING, contractType=PERPETUAL, quoteAsset=USDT, marginAsset=USDT, and exact underlyingType=COIN.
-- Exclude non-trading, non-USDT-quoted/margined, commodity, FX and unknown underlying types. Never infer a class from ticker/title.
-- Newly listed qualifying contracts enter automatically after the next exchangeInfo refresh; inactive or delisted contracts exit automatically.
+- SHORT: status=TRADING, contractType=PERPETUAL, quoteAsset=USDT, marginAsset=USDT, underlyingType=COIN, and underlyingSubType is an array containing the exact category tag Meme (case-insensitive).
+- Exclude all other crypto subtypes from SHORT, plus non-trading, non-USDT-quoted/margined, commodity, FX and unknown underlying types.
+- Never infer a classification from symbol, ticker, token/project name or online descriptions.
+- Newly listed qualifying stock or Meme contracts enter automatically after the next exchangeInfo refresh; inactive or delisted contracts exit automatically.
 
 ETFs and index contracts are eligible only when Binance metadata places them in an approved equity/index underlyingType. Report unknown classifications rather than guessing.
 
 ## Frozen strategy parameters
 
 - Long exactly the eligible stock/index perpetual with the highest Binance-reported rolling 24-hour percentage change.
-- Short exactly the eligible crypto perpetual with the lowest Binance-reported rolling 24-hour percentage change.
+- Short exactly the eligible Meme perpetual with the lowest Binance-reported rolling 24-hour percentage change.
 - Long target notional = 1× NAV; short target notional = 1× NAV; gross exposure = 2× NAV.
 - Exactly one position per side.
 - At most one pair-rebalance attempt per UTC calendar day after the daily ranking snapshot.

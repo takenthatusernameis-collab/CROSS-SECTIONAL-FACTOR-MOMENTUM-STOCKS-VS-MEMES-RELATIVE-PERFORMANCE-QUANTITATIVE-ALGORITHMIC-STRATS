@@ -7,18 +7,36 @@ from typing import Any
 LONG_UNDERLYING_TYPES = frozenset({
     "EQUITY", "CN_EQUITY", "KR_EQUITY", "HK_EQUITY", "PREMARKET", "INDEX",
 })
-SHORT_UNDERLYING_TYPES = frozenset({"COIN"})
+MEME_UNDERLYING_SUBTYPE = "Meme"
 LONG_CONTRACT_TYPE = "TRADIFI_PERPETUAL"
-SHORT_CONTRACT_TYPE = "PERPETUAL"
+MEME_CONTRACT_TYPE = "PERPETUAL"
 QUOTE_ASSET = "USDT"
 MAX_TICKER_WINDOW_AGE_SECONDS = 900
 
 
+def _underlying_subtypes(item: dict[str, Any]) -> tuple[str, ...]:
+    """Return only string tags from Binance's underlyingSubType array."""
+    raw = item.get("underlyingSubType")
+    if not isinstance(raw, list):
+        return ()
+    return tuple(value.strip() for value in raw if isinstance(value, str) and value.strip())
+
+
+def is_meme_perpetual(item: dict[str, Any]) -> bool:
+    """Use Binance's explicit subtype tag; never infer meme status from a symbol."""
+    return (
+        item.get("contractType") == MEME_CONTRACT_TYPE
+        and item.get("underlyingType") == "COIN"
+        and any(tag.casefold() == MEME_UNDERLYING_SUBTYPE.casefold()
+                for tag in _underlying_subtypes(item))
+    )
+
+
 def classify_binance_universe(symbols: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Classify currently trading USDT contracts using Binance metadata only."""
+    """Classify active USDT stock/index and explicitly tagged meme perps."""
     seen: set[str] = set()
     long_contracts: list[dict[str, Any]] = []
-    short_contracts: list[dict[str, Any]] = []
+    meme_contracts: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
 
     for item in symbols:
@@ -43,15 +61,22 @@ def classify_binance_universe(symbols: list[dict[str, Any]]) -> dict[str, list[d
         elif contract_type == LONG_CONTRACT_TYPE and underlying_type in LONG_UNDERLYING_TYPES:
             long_contracts.append(item)
             continue
-        elif contract_type == SHORT_CONTRACT_TYPE and underlying_type in SHORT_UNDERLYING_TYPES:
-            short_contracts.append(item)
+        elif is_meme_perpetual(item):
+            meme_contracts.append(item)
             continue
+        elif contract_type == MEME_CONTRACT_TYPE and underlying_type == "COIN":
+            reason = "not_meme_underlying_subtype"
         else:
             reason = "contract_or_underlying_type_not_in_approved_universe"
-        excluded.append({"symbol": symbol, "contractType": contract_type,
-                         "underlyingType": underlying_type, "reason": reason})
+        excluded.append({
+            "symbol": symbol,
+            "contractType": contract_type,
+            "underlyingType": underlying_type,
+            "underlyingSubType": _underlying_subtypes(item),
+            "reason": reason,
+        })
 
-    return {"long": long_contracts, "short": short_contracts, "excluded": excluded}
+    return {"long": long_contracts, "meme": meme_contracts, "excluded": excluded}
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -158,14 +183,16 @@ def parse_binance_24h_tickers(
 
 
 def build_provisional_leaders(
-    long_records: list[dict[str, Any]], short_records: list[dict[str, Any]]
+    long_records: list[dict[str, Any]], meme_records: list[dict[str, Any]]
 ) -> dict[str, Any]:
     """Return diagnostic leaders; this function never authorizes a position."""
     valid_long = [r for r in long_records if r.get("valid")]
-    valid_short = [r for r in short_records if r.get("valid")]
+    valid_meme = [r for r in meme_records if r.get("valid")]
     long_leader = max(valid_long, key=lambda r: Decimal(r["return_24h_pct"])) if valid_long else None
-    short_leader = min(valid_short, key=lambda r: Decimal(r["return_24h_pct"])) if valid_short else None
-    return {"provisional_long_leader": long_leader,
-            "provisional_short_leader": short_leader,
-            "long_valid_count": len(valid_long),
-            "short_valid_count": len(valid_short)}
+    meme_leader = min(valid_meme, key=lambda r: Decimal(r["return_24h_pct"])) if valid_meme else None
+    return {
+        "provisional_long_leader": long_leader,
+        "provisional_meme_short_leader": meme_leader,
+        "long_valid_count": len(valid_long),
+        "meme_valid_count": len(valid_meme),
+    }

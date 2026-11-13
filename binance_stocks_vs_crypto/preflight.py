@@ -1,4 +1,4 @@
-"""Read-only diagnostic for Binance USD-M stock and crypto perpetuals."""
+"""Read-only diagnostic for Binance stock/index and Meme perpetuals."""
 from __future__ import annotations
 
 import argparse
@@ -17,7 +17,7 @@ from typing import Any
 from .rankings import classify_binance_universe, parse_binance_24h_tickers
 
 BASE_URL = "https://fapi.binance.com/fapi/v1/"
-USER_AGENT = "binance-stocks-vs-crypto-read-only-preflight/0.2"
+USER_AGENT = "binance-stocks-vs-memes-read-only-preflight/0.3"
 MAX_BYTES = 24 * 1024 * 1024
 RETRYABLE = {429, 500, 502, 503, 504}
 ALLOWED_ROUTES = frozenset({
@@ -159,7 +159,7 @@ def run_preflight() -> dict[str, Any]:
 
     started = datetime.now(timezone.utc)
     report: dict[str, Any] = {
-        "report_version": 2,
+        "report_version": 3,
         "project": "binance_stocks_vs_crypto",
         "run_at_utc": started.isoformat().replace("+00:00", "Z"),
         "runner": {
@@ -187,6 +187,7 @@ def run_preflight() -> dict[str, Any]:
             "no_order_or_trade_endpoints": True,
             "no_positions_or_portfolio_state": True,
             "no_external_price_or_taxonomy_provider": True,
+            "meme_classification_uses_exchange_metadata_only": True,
         },
     }
 
@@ -197,13 +198,17 @@ def run_preflight() -> dict[str, Any]:
         try:
             universe = classify_binance_universe(symbols)
             long_types: dict[str, int] = {}
-            short_types: dict[str, int] = {}
+            meme_types: dict[str, int] = {}
+            meme_subtypes: dict[str, int] = {}
             for item in universe["long"]:
                 key = str(item.get("underlyingType"))
                 long_types[key] = long_types.get(key, 0) + 1
-            for item in universe["short"]:
+            for item in universe["meme"]:
                 key = str(item.get("underlyingType"))
-                short_types[key] = short_types.get(key, 0) + 1
+                meme_types[key] = meme_types.get(key, 0) + 1
+                for subtype in item.get("underlyingSubType", []):
+                    if isinstance(subtype, str):
+                        meme_subtypes[subtype] = meme_subtypes.get(subtype, 0) + 1
             excluded_by_reason: dict[str, int] = {}
             for item in universe["excluded"]:
                 key = item["reason"]
@@ -211,23 +216,24 @@ def run_preflight() -> dict[str, Any]:
             report["market_universe"] = {
                 "exchange_symbol_count": len(symbols),
                 "long_stock_and_index_perps_count": len(universe["long"]),
-                "short_crypto_perps_count": len(universe["short"]),
+                "short_meme_perps_count": len(universe["meme"]),
                 "excluded_count": len(universe["excluded"]),
                 "long_underlying_type_counts": dict(sorted(long_types.items())),
-                "short_underlying_type_counts": dict(sorted(short_types.items())),
+                "meme_underlying_type_counts": dict(sorted(meme_types.items())),
+                "meme_underlying_subtype_counts": dict(sorted(meme_subtypes.items())),
                 "excluded_reason_counts": dict(sorted(excluded_by_reason.items())),
                 "sample_long_symbols": [m["symbol"] for m in universe["long"][:5]],
-                "sample_short_symbols": [m["symbol"] for m in universe["short"][:5]],
+                "sample_meme_symbols": [m["symbol"] for m in universe["meme"][:5]],
             }
         except Exception as exc:
             exchange["status"] = "FAIL_SCHEMA"
             exchange["error"] = f"{type(exc).__name__}: {exc}"
-            universe = {"long": [], "short": [], "excluded": []}
+            universe = {"long": [], "meme": [], "excluded": []}
     else:
         exchange["status"] = "FAIL_SCHEMA" if exchange["status"] == "PASS" else exchange["status"]
         if exchange.get("status") == "FAIL_SCHEMA":
             exchange["error"] = "Exchange information did not contain a symbols array"
-        universe = {"long": [], "short": [], "excluded": []}
+        universe = {"long": [], "meme": [], "excluded": []}
     exchange["payload_summary"] = {
         "response_keys": sorted(exchange_payload) if isinstance(exchange_payload, dict) else [],
         "symbol_count": len(symbols) if isinstance(symbols, list) else None,
@@ -264,14 +270,12 @@ def run_preflight() -> dict[str, Any]:
     report["endpoint_results"].append(schedule)
 
     samples = []
-    for side in ("long", "short"):
+    for side in ("long", "meme"):
         if universe[side]:
             samples.append((side, universe[side][0]))
     for side, market in samples:
         symbol = str(market["symbol"])
-        ticker = call(
-            f"sample_24h_ticker:{symbol}", "ticker/24hr", {"symbol": symbol}
-        )
+        ticker = call(f"sample_24h_ticker:{symbol}", "ticker/24hr", {"symbol": symbol})
         ticker_payload = ticker.pop("payload")
         ticker_summary = summarise_24h_ticker(
             ticker_payload, as_of_ms=server_time_ms if server_time_ok else None
@@ -304,6 +308,7 @@ def run_preflight() -> dict[str, Any]:
             "symbol": symbol,
             "contract_type": market.get("contractType"),
             "underlying_type": market.get("underlyingType"),
+            "underlying_sub_type": market.get("underlyingSubType"),
             "ticker_24h": ticker_summary,
             "order_book": depth_summary,
             "mark_index_funding": premium_summary,
@@ -312,7 +317,7 @@ def run_preflight() -> dict[str, Any]:
     statuses = [item["status"] for item in report["endpoint_results"]]
     endpoint_ok = bool(statuses) and all(status == "PASS" for status in statuses)
     long_ok = bool(universe["long"])
-    short_ok = bool(universe["short"])
+    meme_ok = bool(universe["meme"])
     ticker_checks = [
         item for item in report["endpoint_results"]
         if item["name"].startswith("sample_24h_ticker:")
@@ -323,11 +328,11 @@ def run_preflight() -> dict[str, Any]:
     report["gates"] = {
         "public_exchange_info": "PASS" if report["market_universe"] else "FAIL",
         "stock_and_index_perp_universe": "PASS" if long_ok else "FAIL",
-        "crypto_perp_universe": "PASS" if short_ok else "FAIL",
+        "meme_perp_universe": "PASS" if meme_ok else "FAIL",
         "sample_24h_ticker_orderbook_and_funding_endpoints": "PASS" if endpoint_ok else "FAIL",
-        "ticker_endpoint_supports_sampled_contract_types": "PASS" if ticker_schema_ok else "FAIL",
+        "ticker_endpoint_supports_sampled_stock_and_meme_contracts": "PASS" if ticker_schema_ok else "FAIL",
         "overall_read_only_preflight": (
-            "PASS" if endpoint_ok and long_ok and short_ok and ticker_schema_ok else "FAIL"
+            "PASS" if endpoint_ok and long_ok and meme_ok and ticker_schema_ok else "FAIL"
         ),
         "ranking": "NOT_RUN",
         "paper_trading": "NOT_IMPLEMENTED",
@@ -339,7 +344,7 @@ def run_preflight() -> dict[str, Any]:
 def render_markdown(report: dict[str, Any]) -> str:
     universe = report.get("market_universe", {})
     lines = [
-        "# Binance Stock/Index Perpetuals vs Crypto Perpetuals — API Preflight",
+        "# Binance Stock/Index Perpetuals vs Meme Perpetuals — API Preflight",
         "",
         f"- Run: {report['run_at_utc']}",
         f"- Active exchange symbols: {universe.get('exchange_symbol_count')}",
@@ -348,24 +353,25 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Approved universe",
         "",
-        f"- Long stock/index perpetuals: {universe.get('long_stock_and_index_perps_count')}",
-        f"- Short crypto perpetuals: {universe.get('short_crypto_perps_count')}",
+        f"- LONG stock/index perpetuals: {universe.get('long_stock_and_index_perps_count')}",
+        f"- SHORT Meme perpetuals: {universe.get('short_meme_perps_count')}",
         f"- Excluded: {universe.get('excluded_count')}",
-        "- Classification uses exact Binance contractType, underlyingType, status, and USDT settlement fields.",
-        "- Commodity, FX, and unknown underlying types are excluded; no ticker/title inference.",
+        "- LONG classification uses exact contractType, underlyingType, status and USDT settlement fields.",
+        "- SHORT classification requires contractType=PERPETUAL, underlyingType=COIN and an underlyingSubType tag equal to Meme (case-insensitive).",
+        "- Other crypto subtypes, commodity, FX and unknown types are excluded; no ticker/title inference.",
         "- Trading-session schedules are informational only; no stock-market-open gate is used.",
         "",
         "## Sample contracts",
         "",
-        "| Side | Symbol | Contract type | Underlying type | Ticker 24h % | Ticker data valid |",
-        "|---|---|---|---|---:|---|",
+        "| Side | Symbol | Contract type | Underlying type | Underlying subtype | Ticker 24h % | Ticker data valid |",
+        "|---|---|---|---|---|---:|---|",
     ]
     for sample in report.get("sample_checks", []):
         ticker = sample["ticker_24h"]
         lines.append(
             f"| {sample['side']} | {sample['symbol']} | {sample['contract_type']} | "
-            f"{sample['underlying_type']} | {ticker.get('price_change_percent')} | "
-            f"{ticker.get('data_valid')} |"
+            f"{sample['underlying_type']} | {sample.get('underlying_sub_type')} | "
+            f"{ticker.get('price_change_percent')} | {ticker.get('data_valid')} |"
         )
     lines.extend(["", "## Endpoint checks", "", "| Endpoint | Status | Detail |", "|---|---|---|"])
     for item in report.get("endpoint_results", []):
@@ -376,7 +382,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend([
         "",
         "No account state, positions, portfolio state, simulated fills, or exchange orders are read or written.",
-        "The 24-hour ticker endpoint is checked for one sampled stock/index contract and one sampled crypto contract.",
+        "The 24-hour ticker endpoint is checked for one sampled stock/index contract and one sampled Meme contract.",
         "",
     ])
     return "\n".join(lines)

@@ -28,7 +28,7 @@ class ResponseSchemaTests(unittest.TestCase):
     def sample_ticker(self):
         now = 2_000_000_000_000
         return {
-            "symbol": "AAPLUSDT",
+            "symbol": "1000PEPEUSDT",
             "priceChange": "10",
             "priceChangePercent": "10",
             "lastPrice": "110",
@@ -47,7 +47,7 @@ class ResponseSchemaTests(unittest.TestCase):
         self.assertEqual(result["trade_count"], 250)
 
     def test_ticker_summary_rejects_missing_required_fields(self):
-        result = summarise_24h_ticker({"symbol": "AAPLUSDT"})
+        result = summarise_24h_ticker({"symbol": "1000PEPEUSDT"})
         self.assertFalse(result["schema_valid"])
 
     def test_orderbook_summary_reads_bids_and_asks(self):
@@ -63,16 +63,16 @@ class ResponseSchemaTests(unittest.TestCase):
 
     def test_premium_index_summary_extracts_mark_index_and_funding(self):
         payload = {
-            "symbol": "BTCUSDT", "markPrice": "100", "indexPrice": "99",
+            "symbol": "1000PEPEUSDT", "markPrice": "100", "indexPrice": "99",
             "lastFundingRate": "0.0001", "nextFundingTime": 123456,
         }
         result = summarise_premium_index(payload)
         self.assertTrue(result["schema_valid"])
-        self.assertEqual(result["symbol"], "BTCUSDT")
+        self.assertEqual(result["symbol"], "1000PEPEUSDT")
         self.assertEqual(result["last_funding_rate"], "0.0001")
 
     def test_premium_index_summary_rejects_missing_fields(self):
-        self.assertFalse(summarise_premium_index({"symbol": "BTCUSDT"})["schema_valid"])
+        self.assertFalse(summarise_premium_index({"symbol": "1000PEPEUSDT"}))
 
 
 if __name__ == "__main__":

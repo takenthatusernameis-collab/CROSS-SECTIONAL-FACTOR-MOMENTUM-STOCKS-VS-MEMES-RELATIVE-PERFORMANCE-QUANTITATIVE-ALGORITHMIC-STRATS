@@ -4,14 +4,25 @@ from decimal import Decimal
 from binance_stocks_vs_crypto.rankings import (
     build_provisional_leaders,
     classify_binance_universe,
+    is_meme_perpetual,
     parse_binance_24h_tickers,
 )
 
 
-def contract(symbol, contract_type, underlying_type, *, status="TRADING", quote="USDT", margin="USDT"):
-    return {"symbol": symbol, "pair": symbol, "contractType": contract_type,
-            "underlyingType": underlying_type, "status": status,
-            "quoteAsset": quote, "marginAsset": margin}
+def contract(symbol, contract_type, underlying_type, *, subtype=None,
+             status="TRADING", quote="USDT", margin="USDT"):
+    result = {
+        "symbol": symbol,
+        "pair": symbol,
+        "contractType": contract_type,
+        "underlyingType": underlying_type,
+        "status": status,
+        "quoteAsset": quote,
+        "marginAsset": margin,
+    }
+    if subtype is not None:
+        result["underlyingSubType"] = subtype
+    return result
 
 
 def ticker(symbol, percent, *, as_of=2_000_000_000_000, count=250,
@@ -36,32 +47,60 @@ def ticker(symbol, percent, *, as_of=2_000_000_000_000, count=250,
 
 
 class UniverseTests(unittest.TestCase):
-    def test_exact_metadata_separates_stock_index_and_crypto(self):
+    def test_exact_metadata_separates_stocks_and_meme_perpetuals(self):
         result = classify_binance_universe([
             contract("AAPLUSDT", "TRADIFI_PERPETUAL", "EQUITY"),
             contract("SPYUSDT", "TRADIFI_PERPETUAL", "INDEX"),
-            contract("BTCUSDT", "PERPETUAL", "COIN"),
+            contract("1000PEPEUSDT", "PERPETUAL", "COIN", subtype=["Meme"]),
+            contract("DOGEUSDT", "PERPETUAL", "COIN", subtype=["Meme", "BNB Chain"]),
+            contract("BTCUSDT", "PERPETUAL", "COIN", subtype=["Layer-1"]),
             contract("XAUUSDT", "TRADIFI_PERPETUAL", "COMMODITY"),
         ])
         self.assertEqual([x["symbol"] for x in result["long"]], ["AAPLUSDT", "SPYUSDT"])
-        self.assertEqual([x["symbol"] for x in result["short"]], ["BTCUSDT"])
-        self.assertEqual([x["symbol"] for x in result["excluded"]], ["XAUUSDT"])
+        self.assertEqual([x["symbol"] for x in result["meme"]], ["1000PEPEUSDT", "DOGEUSDT"])
+        self.assertEqual(
+            [x["symbol"] for x in result["excluded"]],
+            ["BTCUSDT", "XAUUSDT"],
+        )
+        self.assertEqual(result["excluded"][0]["reason"], "not_meme_underlying_subtype")
 
-    def test_unknown_and_non_trading_contracts_are_excluded(self):
+    def test_meme_tag_is_matched_case_insensitively_without_symbol_inference(self):
+        self.assertTrue(is_meme_perpetual(
+            contract("ANYNAMEUSDT", "PERPETUAL", "COIN", subtype=["mEmE"])
+        ))
+        self.assertFalse(is_meme_perpetual(
+            contract("MEMEUSDT", "PERPETUAL", "COIN", subtype=["DeFi"])
+        ))
+        self.assertFalse(is_meme_perpetual(
+            contract("DOGEUSDT", "PERPETUAL", "COIN")
+        ))
+
+    def test_only_active_usdt_perpetual_memes_are_eligible(self):
         result = classify_binance_universe([
-            contract("TSLAUSDT", "TRADIFI_PERPETUAL", "UNCLASSIFIED"),
-            contract("BTCUSDT", "PERPETUAL", "COIN", status="BREAK"),
-            contract("ETHUSDC", "PERPETUAL", "COIN", quote="USDC", margin="USDC"),
+            contract("QUIZUSDT", "PERPETUAL", "COIN", subtype=["Meme"], status="BREAK"),
+            contract("QUIZUSDC", "PERPETUAL", "COIN", subtype=["Meme"], quote="USDC", margin="USDC"),
+            contract("QUIZUSDT", "PERPETUAL", "COIN", subtype=["Meme"], margin="BUSD"),
+            contract("MSTRUSDT", "TRADIFI_PERPETUAL", "EQUITY"),
+        ])
+        self.assertEqual(result["long"], [contract("MSTRUSDT", "TRADIFI_PERPETUAL", "EQUITY")])
+        self.assertEqual(result["meme"], [])
+        self.assertEqual(len(result["excluded"]), 3)
+
+    def test_unknown_stock_classes_and_non_meme_coin_subtypes_are_excluded(self):
+        result = classify_binance_universe([
+            contract("STOCKUSDT", "TRADIFI_PERPETUAL", "UNCLASSIFIED"),
+            contract("BTCUSDT", "PERPETUAL", "COIN", subtype=["Layer-1"]),
+            contract("ALTUSDT", "PERPETUAL", "COIN", subtype=["DeFi"]),
         ])
         self.assertEqual(result["long"], [])
-        self.assertEqual(result["short"], [])
+        self.assertEqual(result["meme"], [])
         self.assertEqual(len(result["excluded"]), 3)
 
     def test_duplicate_or_missing_symbol_fails_closed(self):
         with self.assertRaises(ValueError):
             classify_binance_universe([
-                contract("DUP", "PERPETUAL", "COIN"),
-                contract("DUP", "PERPETUAL", "COIN"),
+                contract("DUP", "PERPETUAL", "COIN", subtype=["Meme"]),
+                contract("DUP", "PERPETUAL", "COIN", subtype=["Meme"]),
             ])
         with self.assertRaises(ValueError):
             classify_binance_universe([{"contractType": "PERPETUAL"}])
@@ -72,7 +111,6 @@ class TickerTests(unittest.TestCase):
         self.as_of = 2_000_000_000_000
 
     def test_uses_binance_reported_percent_without_recomputing(self):
-        # lastPrice/openPrice imply +10%; the official report says +7.25%.
         parsed = parse_binance_24h_tickers(
             [ticker("AAPLUSDT", "7.25", as_of=self.as_of)], as_of_ms=self.as_of
         )
@@ -120,13 +158,13 @@ class TickerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_binance_24h_tickers([{"priceChangePercent": "1"}], as_of_ms=self.as_of)
 
-    def test_provisional_leaders_select_binance_report_extremes(self):
+    def test_provisional_leaders_select_highest_stock_and_lowest_meme(self):
         parsed = parse_binance_24h_tickers([
             ticker("STOCK1", "5", as_of=self.as_of),
             ticker("STOCK2", "8", as_of=self.as_of),
-            ticker("BTC", "-4", as_of=self.as_of),
-            ticker("ETH", "-8", as_of=self.as_of),
-            ticker("BAD", "-99", as_of=self.as_of, count=0),
+            ticker("PEPE", "-4", as_of=self.as_of),
+            ticker("DOGE", "-8", as_of=self.as_of),
+            ticker("BTC", "-99", as_of=self.as_of, count=0),
         ], as_of_ms=self.as_of)
         leaders = build_provisional_leaders(
             [
@@ -134,13 +172,14 @@ class TickerTests(unittest.TestCase):
                 {**parsed["STOCK2"], "underlying_type": "INDEX"},
             ],
             [
-                {**parsed["BTC"], "underlying_type": "COIN"},
-                {**parsed["ETH"], "underlying_type": "COIN"},
-                {**parsed["BAD"], "underlying_type": "COIN"},
+                {**parsed["PEPE"], "underlying_type": "COIN", "underlying_sub_type": ["Meme"]},
+                {**parsed["DOGE"], "underlying_type": "COIN", "underlying_sub_type": ["Meme"]},
+                {**parsed["BTC"], "underlying_type": "COIN", "underlying_sub_type": ["Layer-1"]},
             ],
         )
         self.assertEqual(leaders["provisional_long_leader"]["symbol"], "STOCK2")
-        self.assertEqual(leaders["provisional_short_leader"]["symbol"], "ETH")
+        self.assertEqual(leaders["provisional_meme_short_leader"]["symbol"], "DOGE")
+        self.assertEqual(leaders["meme_valid_count"], 2)
 
 
 if __name__ == "__main__":
