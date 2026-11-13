@@ -224,7 +224,7 @@ class BybitDailyWorkflowTests(unittest.TestCase):
             self.assertAlmostEqual(report["ratio_roi_pct"],(ratio["close"]/ratio["open"]-1)*100,places=9)
             self.assertAlmostEqual(report["daily_ratio_drawdown_pct"],min(0.0,(ratio["low"]/ratio["open"]-1)*100),places=9)
             self.assertLess(report["daily_ratio_drawdown_pct"],0)
-            self.assertEqual(report["performance_computed_at_utc"],d2.replace(hour=0,minute=0,second=0,microsecond=0).isoformat())
+            self.assertEqual(report["performance_computed_at_utc"],d2.isoformat())
             self.assertEqual(report["daily_close_utc"],"2026-01-02T00:00:00+00:00")
             self.assertNotAlmostEqual(report["ratio_roi_pct"],report["net_portfolio_roi_pct"],places=4)
             self.assertEqual(store.get_open_day()["utc_date"],"2026-01-02"); store.close()
