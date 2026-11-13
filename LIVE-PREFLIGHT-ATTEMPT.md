@@ -1,6 +1,6 @@
 # Bybit + CoinMarketCap live preflight attempt
 
-- Attempt: 2026-11-13 05:24:58 UTC
+- Latest attempt: 2026-11-13 05:32:22.818 UTC
 - Method: public, unauthenticated HTTPS GET; no credentials, no testnet, no orders
 - Bybit: `https://api.bybit.com/v5/market/instruments-info?category=linear`
 - CoinMarketCap: `https://pro-api.coinmarketcap.com/public-api/v1/cryptocurrency/categories`
