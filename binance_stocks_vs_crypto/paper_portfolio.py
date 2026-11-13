@@ -146,8 +146,10 @@ def lot_rules(market: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal, Decima
 def size_order(target: Decimal, levels: list[tuple[Decimal, Decimal]],
                market: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
     minimum, step, maximum, min_notional = lot_rules(market)
+    if target <= 0:
+        raise PaperError("Target notional must be positive")
     qty = (target / levels[0][0] / step).to_integral_value(rounding=ROUND_DOWN) * step
-    for _ in range(20):
+    for _ in range(100):
         if qty < minimum:
             raise PaperError(f"{market['symbol']}: target is below minimum quantity")
         if maximum.is_finite() and qty > maximum:
@@ -158,7 +160,12 @@ def size_order(target: Decimal, levels: list[tuple[Decimal, Decimal]],
             if min_notional is not None and notional < min_notional:
                 raise PaperError(f"{market['symbol']}: below minimum notional")
             return qty, price, notional
-        qty -= step
+        # Recalculate against the impact-adjusted VWAP instead of decrementing
+        # one lot at a time. Enforce monotonic reduction to avoid oscillation.
+        revised = (target / price / step).to_integral_value(rounding=ROUND_DOWN) * step
+        if revised >= qty:
+            revised = qty - step
+        qty = revised
     raise PaperError(f"{market['symbol']}: cannot size within target notional")
 
 def funding_cash(leg: str, qty: Decimal, event: dict[str, Any]) -> Decimal:

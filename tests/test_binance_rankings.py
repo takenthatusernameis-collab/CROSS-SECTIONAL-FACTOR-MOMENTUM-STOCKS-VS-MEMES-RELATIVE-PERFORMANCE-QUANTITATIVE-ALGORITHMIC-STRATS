@@ -79,7 +79,7 @@ class UniverseTests(unittest.TestCase):
         result = classify_binance_universe([
             contract("QUIZUSDT", "PERPETUAL", "COIN", subtype=["Meme"], status="BREAK"),
             contract("QUIZUSDC", "PERPETUAL", "COIN", subtype=["Meme"], quote="USDC", margin="USDC"),
-            contract("QUIZUSDT", "PERPETUAL", "COIN", subtype=["Meme"], margin="BUSD"),
+            contract("QUIZ2USDT", "PERPETUAL", "COIN", subtype=["Meme"], margin="BUSD"),
             contract("MSTRUSDT", "TRADIFI_PERPETUAL", "EQUITY"),
         ])
         self.assertEqual(result["long"], [contract("MSTRUSDT", "TRADIFI_PERPETUAL", "EQUITY")])
