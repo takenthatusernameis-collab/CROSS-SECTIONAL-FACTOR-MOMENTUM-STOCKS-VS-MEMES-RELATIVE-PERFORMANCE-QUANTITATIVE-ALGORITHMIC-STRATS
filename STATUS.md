@@ -4,7 +4,6 @@
 
 ## Reset baseline
 
-<badge>New campaign</badge>
 
 The previous paper account, open-position records, trade ledger and performance history have been cleared from the active state branch. The new campaign starts with **10 USDT** of starting capital.
 
