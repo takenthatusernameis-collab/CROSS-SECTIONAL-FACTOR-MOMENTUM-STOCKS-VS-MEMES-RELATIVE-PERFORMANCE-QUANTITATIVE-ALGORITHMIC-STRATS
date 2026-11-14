@@ -28,7 +28,9 @@ on:
 # Only one job may read-modify-push the SQLite state branch at a time.
 # Do not cancel a running accounting/monitor cycle.
 concurrency:
-  group: bitget-stocks-vs-crypto-paper
+  # Keep read-only push/manual diagnostics from occupying the portfolio writer lock.
+  # Scheduled and manual paper runs still share one serialized SQLite writer group.
+  group: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'diagnostic')) && 'bitget-stocks-vs-crypto-diagnostic' || 'bitget-stocks-vs-crypto-paper' }}
   cancel-in-progress: false
 
 permissions:
