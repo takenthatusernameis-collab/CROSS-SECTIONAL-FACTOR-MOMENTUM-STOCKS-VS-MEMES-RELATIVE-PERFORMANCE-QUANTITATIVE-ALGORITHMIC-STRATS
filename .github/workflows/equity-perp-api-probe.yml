@@ -1,0 +1,38 @@
+name: Read-only 24/7 Equity Perpetual API Probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/equity-perp-api-probe.yml'
+      - 'scripts/probe_equity_perps.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-public-market-data:
+    name: Probe exchange APIs from GitHub-hosted Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Probe public equity-perpetual market data
+        run: python scripts/probe_equity_perps.py
+
+      - name: Upload API probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: equity-perp-api-probe
+          path: artifacts/equity-perp-probe/
+          if-no-files-found: error
+          retention-days: 30
