@@ -179,6 +179,9 @@ class MonitoringIsolationTests(unittest.TestCase):
                                  "low":values[2],"close":values[3]})
                 return rows
 
+            with sqlite3.connect(db_path) as db:
+                mdd_before_monitor = db.execute("SELECT max_drawdown_pct FROM strategy_risk WHERE id=1").fetchone()[0]
+
             incomplete = monitor_open_positions(
                 db_path, now_ms=first_now, initial_nav=D("10000"), ticker_fetch=tickers,
                 funding_fetch=lambda symbol,start,end:[],
@@ -188,7 +191,7 @@ class MonitoringIsolationTests(unittest.TestCase):
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM monitor_minute_metrics").fetchone()[0], 0)
                 self.assertIsNone(db.execute("SELECT last_processed_minute_ms FROM monitor_state WHERE id=1").fetchone()[0])
                 mdd_after_gap = db.execute("SELECT max_drawdown_pct FROM strategy_risk WHERE id=1").fetchone()[0]
-            self.assertEqual(mdd_after_gap, "0", "an incomplete minute segment must not update strategy MDD")
+            self.assertEqual(mdd_after_gap, mdd_before_monitor, "an incomplete minute segment must not update strategy MDD")
 
             recovered = monitor_open_positions(
                 db_path, now_ms=second_now, initial_nav=D("10000"), ticker_fetch=tickers,

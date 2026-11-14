@@ -25,7 +25,7 @@ class MinuteRiskTests(unittest.TestCase):
         short_market = [
             bar(timestamps[0], 10, 10.5, 9.8, 10),
             bar(timestamps[1], 10, 12, 9, 11),
-            bar(timestamps[2], 11, 10.5, 9.2, 10),
+            bar(timestamps[2], 11, 11.5, 9.2, 10),
         ]
         return {
             "start_ms": start,
