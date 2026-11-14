@@ -6,20 +6,20 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **9.22 USDT** |
+| Current NAV | **9.60 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-0.78 USDT** |
-| Portfolio ROI vs starting capital | **-7.82%** |
-| Current-cycle ROI | -7.60% |
-| Unrealized P&L (gross) | -0.77 USDT |
+| NAV change vs starting capital | **-0.40 USDT** |
+| Portfolio ROI vs starting capital | **-3.96%** |
+| Current-cycle ROI | -3.73% |
+| Unrealized P&L (gross) | -0.39 USDT |
 | Cumulative realized gross P&L | 0.00 USDT |
 | Fees paid to date | 0.01 USDT |
 | Funding posted to ledger | 0.00 USDT |
 | Estimated funding pending | 0.00 USDT |
-| Gross exposure | 18.18 USDT |
+| Gross exposure | 18.21 USDT |
 | Closed trades | 0 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-14 14:57:28 UTC._
+_NAV source: live mark-to-market observation. Values as of 2026-11-14 19:51:50 UTC._
 
 ## Latest workflow result
 
@@ -31,9 +31,9 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-14 14:57:28 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-0.78 USDT**
-- **Lifetime portfolio ROI:** **-7.82%**
-- **Equity-curve observations:** 12
+- **Current equity P&L vs initial capital:** **-0.40 USDT**
+- **Lifetime portfolio ROI:** **-3.96%**
+- **Equity-curve observations:** 13
 - **Closed trades:** 0 | **Open trades:** 2
 - **Realized net P&L on closed trades:** 0.00 USDT
 - **Closed-trade win rate:** Not available
@@ -60,14 +60,14 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | SOXSUSDT | 0.180000 | 52.82500000 | 53.00000000 | 0.03 USDT | 0.21% |
-| SHORT | BANANAS31USDT | 2,000.000000 | 0.00391800 | 0.00432000 | -0.80 USDT | -10.37% |
+| LONG | SOXSUSDT | 0.180000 | 52.82500000 | 54.16500000 | 0.24 USDT | 2.41% |
+| SHORT | BANANAS31USDT | 2,000.000000 | 0.00391800 | 0.00423200 | -0.63 USDT | -8.12% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -16.31% (observed minute history)
 - **Current holding-cycle MDD:** -16.31%
-- **Minute-data coverage:** 749/749 (100.00%)
+- **Minute-data coverage:** 1043/1043 (100.00%)
 - **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
 - **Historical risk intervals:** 0 complete / 0 incomplete
 - **Latest completed risk interval:** NO_PRIOR_POSITIONS
@@ -82,11 +82,11 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-14 14:57:31 UTC
-- **Paper workflow started:** 2026-11-14 14:57:03 UTC
-- **Latest saved market observation:** 2026-11-14 14:57:28 UTC
+- **STATUS.md generated:** 2026-11-14 19:51:55 UTC
+- **Paper workflow started:** 2026-11-14 19:51:27 UTC
+- **Latest saved market observation:** 2026-11-14 19:51:50 UTC
 - **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [43607500487](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/43607500487)
+- **GitHub Actions run:** [43634339792](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/43634339792)
 
 ## Interpretation notes
 
