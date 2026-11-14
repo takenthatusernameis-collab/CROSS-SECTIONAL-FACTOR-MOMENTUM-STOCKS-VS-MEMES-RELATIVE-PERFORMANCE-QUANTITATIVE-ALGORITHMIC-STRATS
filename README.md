@@ -52,6 +52,7 @@ The SQLite database includes `strategy_risk`, `risk_intervals`, `minute_metrics`
 - GitHub Actions schedule: **every five minutes (`*/5 * * * *`)** on `ubuntu-latest`.
 - Workflow concurrency serializes the SQLite restore/monitor/rebalance/persist cycle. GitHub scheduling may be delayed; the cooldown uses actual run-start time and does not require exact expiry-minute alignment.
 - The SQLite database is stored on the dedicated `bitget-paper-portfolio-state` branch and backed up with each workflow artifact. Per-run artifacts expire after one day; the state branch is the long-lived ledger and monitoring store.
+- Human-readable live view: [STATUS.md](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/blob/bitget-paper-portfolio-state/STATUS.md) is regenerated from the same database after every successful scheduled or manual paper run. It summarizes open positions, NAV/P&L/ROI, drawdown, cooldown, latest update and data quality.
 - The database includes `account`, `positions`, `trades`, `ledger` and `daily_snapshots` tables.
 - Reports include JSON, Markdown, `closed_trades.csv`, `daily_nav.csv`, `daily_risk.csv` and `latest_minute_risk.csv`.
 - First successful paper run initializes the account at **10,000 USDT** by default. `PAPER_INITIAL_NAV_USDT` can be set before the first run; initial NAV is immutable after the database exists.

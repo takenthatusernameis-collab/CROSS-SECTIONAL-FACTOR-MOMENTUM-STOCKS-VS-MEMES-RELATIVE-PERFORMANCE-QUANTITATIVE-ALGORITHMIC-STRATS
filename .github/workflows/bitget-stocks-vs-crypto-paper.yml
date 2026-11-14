@@ -19,6 +19,7 @@ on:
       - ".github/workflows/bitget-stocks-vs-crypto-paper.yml"
       - "bitget_stocks_vs_crypto/**"
       - "scripts/run_bitget_paper.py"
+      - "scripts/render_bitget_status.py"
       - "tests/test_bitget_*.py"
       - "README.md"
       - "PROMPT.md"
@@ -67,7 +68,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_bitget_*.py' -v
 
       - name: Compile source and tests
-        run: python -m compileall -q bitget_stocks_vs_crypto scripts/run_bitget_paper.py tests
+        run: python -m compileall -q bitget_stocks_vs_crypto scripts tests
 
       - name: Restore durable SQLite paper ledger
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')
@@ -140,6 +141,19 @@ jobs:
           # Keep the artifact copy safe even if a later Git branch operation fails.
           trap 'if [[ -s "$DB_COPY" ]]; then mkdir -p "$(dirname "$PAPER_DB")"; cp "$DB_COPY" "$PAPER_DB"; fi' EXIT
 
+          # Render a human-readable view from the exact SQLite copy being persisted.
+          STATUS_COPY="$RUNNER_TEMP/STATUS.md"
+          python scripts/render_bitget_status.py \
+            --db-path "$DB_COPY" \
+            --output "$STATUS_COPY" \
+            --workflow-start-ms "$PAPER_WORKFLOW_STARTED_MS" \
+            --run-id "$GITHUB_RUN_ID" \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --mode "$MODE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --report-json "$PAPER_OUTPUT/bitget_paper_report.json"
+          test -s "$STATUS_COPY"
+
           STATE_BRANCH="bitget-paper-portfolio-state"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -156,9 +170,10 @@ jobs:
           fi
           mkdir -p state
           cp "$DB_COPY" state/bitget_paper.sqlite3
-          git add state/bitget_paper.sqlite3
+          cp "$STATUS_COPY" STATUS.md
+          git add state/bitget_paper.sqlite3 STATUS.md
           if ! git diff --cached --quiet; then
-            git commit -m "Persist five-minute Bitget paper monitor state"
+            git commit -m "Persist paper portfolio database and readable status"
           fi
           git push origin "HEAD:refs/heads/${STATE_BRANCH}"
 
