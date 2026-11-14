@@ -253,7 +253,7 @@ def probe_okx() -> dict[str, Any]:
         "scan": classification_scan(instruments),
         "source_used": "official_swap_instrument_catalog",
     }
-        q=next((x for x in instruments if str(x.get("instId","")).upper() in targets),None)
+    q=next((x for x in instruments if str(x.get("instId","")).upper() in targets),None)
     symbol=q.get("instId") if q else None
     r["market_found"]=q is not None
     r["sample_symbols"]=[x.get("instId") for x in instruments if x.get("instId") in targets]
