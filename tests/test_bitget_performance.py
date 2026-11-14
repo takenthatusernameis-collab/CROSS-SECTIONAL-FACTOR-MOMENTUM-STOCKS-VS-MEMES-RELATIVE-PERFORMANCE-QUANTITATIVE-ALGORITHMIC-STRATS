@@ -102,7 +102,7 @@ class LifetimePerformanceTests(unittest.TestCase):
             self.assertGreater((output / name).stat().st_size, 0, name)
         with (output / "equity_curve.csv").open(newline="") as f:
             rows = list(csv.reader(f))
-        self.assertEqual(len(rows), 2)  # seed point plus one completed valuation
+        self.assertEqual(len(rows), 3)  # header plus seed point and one completed valuation
 
     def test_out_of_order_workflow_observation_fails_closed(self):
         ensure_equity_start(self.db_path, self.start)
