@@ -1,0 +1,1 @@
+trade_id,status,leg,symbol,entry_time_ms,entry_date,entry_qty,entry_price,entry_notional,entry_fee,exit_time_ms,exit_date,exit_price,exit_notional,exit_fee,gross_pnl,funding_pnl,net_pnl,trade_roi_pct

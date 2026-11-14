@@ -1,0 +1,2 @@
+workflow_start_utc,workflow_start_ms,valuation_utc,event_type,nav_usdt,cash_usdt,unrealized_pnl_usdt,gross_exposure_usdt,portfolio_roi_pct,long_symbol,short_symbol
+2026-11-14T02:21:47.080Z,1794622907080,2026-11-14T02:21:47.080Z,START,10,10,0,0,0,,
