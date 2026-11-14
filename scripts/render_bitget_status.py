@@ -5,10 +5,18 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
+
+# Running "python scripts/render_bitget_status.py" puts scripts/, not the
+# repository root, at sys.path[0]. Add the project root so the local package
+# imports work in a clean GitHub Actions checkout without an editable install.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 from bitget_stocks_vs_crypto.performance import performance_summary, export_performance_artifacts
 
