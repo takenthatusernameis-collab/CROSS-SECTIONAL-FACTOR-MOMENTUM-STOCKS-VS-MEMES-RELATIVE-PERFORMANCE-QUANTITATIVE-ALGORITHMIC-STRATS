@@ -102,6 +102,23 @@ class PaperLedgerTests(unittest.TestCase):
             self.assertEqual(repeated["status"], "COOLDOWN_ACTIVE")
             self.assertEqual(len(trade_report(db_path)["open_trades"]), 2)
 
+    def test_clean_ten_usdt_initialization_has_binary_cooldown_zero_and_empty_ledger(self):
+        import sqlite3
+        from bitget_stocks_vs_crypto.portfolio import init_db
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "paper.sqlite3"
+            db = init_db(db_path, D("10"))
+            db.close()
+            with sqlite3.connect(db_path) as db:
+                account = db.execute("SELECT initial_nav,cash FROM account WHERE id=1").fetchone()
+                cooldown = db.execute("SELECT cooldown,activated_at_ms,reset_at_ms FROM cooldown_control WHERE id=1").fetchone()
+                positions = db.execute("SELECT COUNT(*) FROM positions").fetchone()[0]
+                trades = db.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
+            self.assertEqual(account, ("10", "10"))
+            self.assertEqual(cooldown, (0, None, None))
+            self.assertEqual(positions, 0)
+            self.assertEqual(trades, 0)
+
     def test_ten_usdt_starting_capital_can_open_both_minimum_notional_legs(self):
         as_of = 1_800_000_000_000
         with tempfile.TemporaryDirectory() as tmp:
