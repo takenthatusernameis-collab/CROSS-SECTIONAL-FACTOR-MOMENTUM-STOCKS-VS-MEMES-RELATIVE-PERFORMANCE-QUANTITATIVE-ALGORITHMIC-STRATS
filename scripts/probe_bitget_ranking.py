@@ -108,20 +108,41 @@ def rows(payload: dict[str, Any], stage: str) -> list[dict[str, Any]]:
 def scan_meme_tags(instruments: list[dict[str, Any]]) -> dict[str, Any]:
     keys = sorted({key for row in instruments for key in row})
     fields = [key for key in keys if "meme" in key.casefold()]
+    taxonomy_tokens = (
+        "category", "symboltype", "instrumenttype", "underlyingtype",
+        "underlyingsubtype", "tag", "subtype", "classification", "sector", "theme",
+    )
+    taxonomy_fields = [
+        key for key in keys
+        if any(token in key.casefold() for token in taxonomy_tokens)
+    ]
     matches = []
+    non_taxonomy_collisions = []
     for row in instruments:
         hits = {}
+        collisions = {}
         for key, value in row.items():
             values = value if isinstance(value, list) else [value]
-            if any(isinstance(x, str) and x.strip().casefold() in {"meme", "memes"} for x in values):
+            exact = any(
+                isinstance(x, str) and x.strip().casefold() in {"meme", "memes"}
+                for x in values
+            )
+            if exact and key in taxonomy_fields:
                 hits[key] = value
+            elif exact:
+                collisions[key] = value
         if hits:
             matches.append({"symbol": row.get("symbol"), "fields": hits})
+        if collisions:
+            non_taxonomy_collisions.append({"symbol": row.get("symbol"), "fields": collisions})
     return {
         "metadata_fields": keys,
+        "taxonomy_candidate_fields": taxonomy_fields,
         "explicit_meme_field_names": fields,
         "exact_meme_tag_match_count": len(matches),
         "exact_meme_tag_matches": matches[:50],
+        "non_taxonomy_string_collisions": non_taxonomy_collisions[:50],
+        "non_taxonomy_string_collision_count": len(non_taxonomy_collisions),
         "symbol_name_inference_used": False,
     }
 
@@ -486,8 +507,10 @@ def render_markdown(report: dict[str, Any]) -> str:
     if tax:
         lines.extend(["", "## Meme taxonomy audit", "",
             f"- Metadata fields containing the word meme: {tax.get('explicit_meme_field_names') or 'none'}",
-            f"- Exact Meme/Memes tag matches: {tax.get('exact_meme_tag_match_count')}",
-            "- No symbol-name inference was used; no Meme-only ranking was attempted.",
+            f"- Exact Meme/Memes matches in taxonomy fields: {tax.get('exact_meme_tag_match_count')}",
+            f"- Exact Meme/Memes strings outside taxonomy fields (not treated as tags): {tax.get('non_taxonomy_string_collision_count')}",
+            f"- Non-taxonomy examples: {json.dumps(tax.get('non_taxonomy_string_collisions', []))}",
+            "- Base-coin/name strings are not accepted as taxonomy; no Meme-only ranking was attempted.",
         ])
     if report.get("failure"):
         fail = report["failure"]
