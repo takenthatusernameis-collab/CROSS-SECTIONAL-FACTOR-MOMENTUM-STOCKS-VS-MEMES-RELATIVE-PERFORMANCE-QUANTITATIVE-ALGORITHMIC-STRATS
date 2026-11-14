@@ -1,0 +1,15 @@
+{
+  "purpose": "restore_exact_interrupted_bitget_paper_database_before_any_new_paper_cycle",
+  "source_run_id": 43546451119,
+  "source_artifact_id": 14094526343,
+  "artifact_name": "bitget-stocks-vs-crypto-43546451119",
+  "database_path": "state/bitget_paper.sqlite3",
+  "expected_initial_nav_usdt": "10",
+  "expected_positions": {
+    "LONG": "SOXSUSDT",
+    "SHORT": "BANANAS31USDT"
+  },
+  "expected_open_trades": 2,
+  "expected_cooldown": 1,
+  "expected_reset_at_ms": 1794709680000
+}
