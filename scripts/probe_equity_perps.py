@@ -40,6 +40,59 @@ def rows(payload: dict[str, Any], *paths: str) -> list[dict[str, Any]]:
         value = value.get(key) if isinstance(value, dict) else None
     return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
 
+
+def classification_scan(instruments: list[dict[str, Any]]) -> dict[str, Any]:
+    """Find explicit exchange-provided Meme tags; never infer from coin symbols/names."""
+    candidate_keys = {
+        "category", "instcategory", "symboltype", "instrumenttype",
+        "underlyingtype", "underlyingsubtype", "tags", "tag", "subtype",
+        "sector", "classification", "theme", "marketregion", "isrwa",
+        "fullName".lower(),
+    }
+    keys = sorted({key for item in instruments for key in item})
+    relevant = sorted(
+        key for key in keys
+        if key.lower() in candidate_keys
+        or any(token in key.lower() for token in ("meme", "tag", "subtype", "sector", "classif", "theme"))
+    )
+    exact_matches = []
+    for item in instruments:
+        matched_fields = {}
+        for key in relevant:
+            value = item.get(key)
+            values = value if isinstance(value, list) else [value]
+            if any(isinstance(v, str) and v.strip().casefold() in ("meme", "memes") for v in values):
+                matched_fields[key] = value
+        if matched_fields:
+            exact_matches.append({"symbol": item.get("symbol") or item.get("instId"),
+                                  "matching_fields": matched_fields})
+    distinct = {}
+    for key in relevant:
+        vals = []
+        for item in instruments:
+            value = item.get(key)
+            if value in (None, "", [], {}):
+                continue
+            if isinstance(value, list):
+                vals.extend(v for v in value if isinstance(v, (str, int, float, bool)))
+            elif isinstance(value, (str, int, float, bool)):
+                vals.append(value)
+        distinct[key] = sorted({str(v) for v in vals})[:100]
+    sample = instruments[0] if instruments else {}
+    return {
+        "instrument_count": len(instruments),
+        "metadata_fields": keys,
+        "classification_candidate_fields": relevant,
+        "distinct_candidate_field_values": distinct,
+        "explicit_meme_field_names": [key for key in keys if "meme" in key.lower()],
+        "exact_meme_tag_matches": exact_matches[:100],
+        "exact_meme_tag_match_count": len(exact_matches),
+        "sample_instrument_classification_fields": {
+            key: sample.get(key) for key in relevant if key in sample
+        },
+        "symbol_name_inference_used": False,
+    }
+
 def summary(label: str, r: dict[str, Any], ok: bool) -> dict[str, Any]:
     return {"request": label, "http_status": r["http_status"],
             "elapsed_seconds": r["elapsed_seconds"], "api_success": bool(ok),
@@ -141,7 +194,18 @@ def probe_bitget() -> dict[str, Any]:
     mok=m["http_status"] == 200 and m["payload"].get("code") == "00000"
     contracts=rows(m["payload"],"data")
     r["metadata"]=summary("GET /api/v2/mix/market/contracts",m,mok)
-    targets={"TSLAUSDT","AAPLUSDT","NVDAUSDT","MSTRUSDT","GOOGLUSDT"}
+    tax = get_json(base+"/api/v3/market/instruments?category=USDT-FUTURES")
+    tax_ok = tax["http_status"] == 200 and tax["payload"].get("code") == "00000"
+    tax_rows = rows(tax["payload"],"data")
+    r["meme_classification"] = {
+        "source_endpoint": "GET /api/v3/market/instruments?category=USDT-FUTURES",
+        "http_status": tax["http_status"],
+        "api_success": tax_ok,
+        "error": tax["error"],
+        "scan": classification_scan(tax_rows if tax_rows else contracts),
+        "source_used": "v3_contract_catalog" if tax_rows else "v2_contract_catalog_fallback",
+    }
+        targets={"TSLAUSDT","AAPLUSDT","NVDAUSDT","MSTRUSDT","GOOGLUSDT"}
     q=next((x for x in contracts if str(x.get("symbol","")).upper() in targets),None)
     rwa=[x for x in contracts if str(x.get("isRwa","")).upper()=="YES"]
     r["market_found"]=q is not None
@@ -181,7 +245,15 @@ def probe_okx() -> dict[str, Any]:
     mok=m["http_status"] == 200 and m["payload"].get("code") == "0"
     instruments=rows(m["payload"],"data")
     r["metadata"]=summary("GET /api/v5/public/instruments",m,mok)
-    q=next((x for x in instruments if str(x.get("instId","")).upper() in targets),None)
+    r["meme_classification"] = {
+        "source_endpoint": "GET /api/v5/public/instruments?instType=SWAP",
+        "http_status": m["http_status"],
+        "api_success": mok,
+        "error": m["error"],
+        "scan": classification_scan(instruments),
+        "source_used": "official_swap_instrument_catalog",
+    }
+        q=next((x for x in instruments if str(x.get("instId","")).upper() in targets),None)
     symbol=q.get("instId") if q else None
     r["market_found"]=q is not None
     r["sample_symbols"]=[x.get("instId") for x in instruments if x.get("instId") in targets]
@@ -252,6 +324,22 @@ def render(report: dict[str, Any]) -> str:
         lines.append(f"| {v['venue']} | {(v.get('metadata') or {}).get('api_success')} | "
                      f"{v.get('market_found')} | {v.get('live_quote_found')} | {v.get('usable_public_market_data')} |")
     for v in report["venues"]:
+        tax = v.get("meme_classification")
+        if tax:
+            scan = tax.get("scan", {})
+            lines.extend([
+                "",
+                f"## {v['venue']} — exchange-native Meme classification",
+                "",
+                f"- Metadata endpoint: {tax.get('source_endpoint')}",
+                f"- Metadata API success: {tax.get('api_success')}",
+                f"- Instruments scanned: {scan.get('instrument_count')}",
+                f"- Exact Meme-tag matches: {scan.get('exact_meme_tag_match_count')}",
+                f"- Explicit Meme field names: {', '.join(scan.get('explicit_meme_field_names') or []) or 'none'}",
+                f"- Candidate taxonomy fields: {', '.join(scan.get('classification_candidate_fields') or []) or 'none'}",
+                f"- Symbol-name inference used: {scan.get('symbol_name_inference_used')}",
+                f"- Candidate field values: {json.dumps(scan.get('distinct_candidate_field_values', {}), sort_keys=True)}",
+            ])
         lines.extend(["",f"## {v['venue']}","",f"- Documented hours: {v.get('documented_stock_perp_hours')}",
                       f"- Symbols: {', '.join(v.get('sample_symbols') or []) or 'none'}"])
         for section in ("metadata","ticker","orderbook"):
@@ -277,7 +365,7 @@ def main() -> int:
                            "usable_public_market_data":False,"sample_symbols":[],
                            "metadata":{},"ticker":{},"orderbook":{},
                            "notes":[f"{type(exc).__name__}: {exc}"]})
-    report={"report_version":1,
+    report={"report_version":2,
             "run_at_utc":datetime.now(timezone.utc).isoformat().replace("+00:00","Z"),
             "runner":{"os":platform.platform(),"python":platform.python_version(),
                       "github_runner_os":os.getenv("RUNNER_OS"),
