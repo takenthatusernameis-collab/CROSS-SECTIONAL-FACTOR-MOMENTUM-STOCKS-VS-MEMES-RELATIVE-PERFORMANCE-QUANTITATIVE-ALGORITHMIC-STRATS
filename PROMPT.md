@@ -43,6 +43,16 @@ Do not infer class from ticker, `baseCoin`, contract name, project name, token d
 - Track portfolio cash, realized and unrealized P&L, fees, funding, gross exposure, NAV, daily return and cumulative portfolio ROI (`NAV / initial NAV - 1`).
 - Treat funding, closes, opens, ledger rows, trade updates and daily snapshot as one atomic SQLite transition. Any market-data/accounting failure rolls back the full transition.
 
+## Minute spread and risk analytics (accounting only; do not change selection)
+
+- After a prior daily pair has been held, fetch the complete interval of one-minute Bitget contract candles from the public `GET /api/v3/market/candles` endpoint. Use `category=USDT-FUTURES`, `interval=1m`, and `type=market` for the synthetic spread, plus `type=mark` for NAV/MDD.
+- The synthetic spread ratio is `long market price / short market price`. Within each minute, spread high envelope = `long high / short low`; spread low envelope = `long low / short high`; interval spread DD = `(minimum spread low / maximum spread high - 1) × 100`.
+- Reconstruct minute paper NAV from the previous snapshot's cash, observed funding settlements, actual leg quantities and entry prices. For a conservative mark-price NAV envelope, NAV high uses long mark high and short mark low; NAV low uses long mark low and short mark high. Update the historical strategy peak and MDD only from complete paired minute intervals, plus the final daily rebalance NAV.
+- Synchronized OHLC bars do not prove exact intraminute price ordering or simultaneous cross-leg extrema. Label these values as conservative OHLC-envelope estimates, never tick-exact values.
+- Require every expected complete minute to exist for both symbols and both candle types before updating historical intraday MDD. Record expected/matched counts and coverage. Partial/missing data is explicitly marked and must not contaminate the historical minute MDD. Candle-data failure must not alter the ranking or independently block a valid daily paper rebalance.
+- Persist interval summaries and minute observations to SQLite. Export the daily risk history and latest interval minute series. Report spread open/high/low/close, spread DD, daily MDD, historical strategy MDD and coverage quality.
+- The first portfolio snapshot has no prior held interval; record `NO_PRIOR_POSITIONS` rather than inventing a spread or minute MDD. Do not call TradingView or use its API.
+
 ## Persistence and operation
 
 - SQLite path: `state/bitget_paper.sqlite3`.

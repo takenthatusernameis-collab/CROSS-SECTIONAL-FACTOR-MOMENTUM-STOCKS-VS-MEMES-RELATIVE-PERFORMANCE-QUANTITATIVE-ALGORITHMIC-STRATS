@@ -20,6 +20,7 @@ ALLOWED_PATHS = frozenset({
     "/api/v3/market/time",
     "/api/v3/market/instruments",
     "/api/v3/market/tickers",
+    "/api/v3/market/candles",
     "/api/v2/mix/market/merge-depth",
     "/api/v2/mix/market/history-fund-rate",
     "/api/v2/mix/market/history-mark-candles",

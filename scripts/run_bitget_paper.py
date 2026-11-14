@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
 
 from bitget_stocks_vs_crypto.market import MarketDataError, decimal_value, get_json, build_ranking_report
 from bitget_stocks_vs_crypto.portfolio import (PaperError, fee_rate_for, parse_book, run_snapshot, size_for_target_notional, trade_report)
+from bitget_stocks_vs_crypto.risk import expected_minute_starts
 
 
 def fetch_depth(symbol: str) -> dict[str, Any]:
@@ -78,6 +79,62 @@ def read_only_execution_preflight(report: dict[str, Any], initial_nav: Decimal,
         "gross_target_usdt": str(target * 2),
         "legs": legs,
     }
+
+
+def fetch_1m_candles(symbol: str, start_ms: int, end_ms: int, candle_type: str) -> list[dict[str, Any]]:
+    """Fetch complete one-minute Bitget contract candles using public GET only.
+
+    The v3 endpoint returns up to 1,000 bars per request. Requests are split on
+    minute boundaries; duplicate or malformed rows fail closed for analytics.
+    """
+    if candle_type not in {"market", "mark"}:
+        raise PaperError(f"{symbol}: unsupported candle type {candle_type!r}")
+    expected = expected_minute_starts(start_ms, end_ms)
+    if not expected:
+        return []
+    found: dict[int, dict[str, Any]] = {}
+    page_size = 1000
+    for offset in range(0, len(expected), page_size):
+        chunk = expected[offset:offset + page_size]
+        chunk_first, chunk_last = chunk[0], chunk[-1]
+        payload, _ = get_json("/api/v3/market/candles", {
+            "category": "USDT-FUTURES", "symbol": symbol, "interval": "1m",
+            "type": candle_type, "startTime": str(chunk_first),
+            "endTime": str(chunk_last + 59_999), "limit": str(page_size),
+        }, stage=f"candles_{candle_type}_{symbol}")
+        rows = payload.get("data")
+        if not isinstance(rows, list):
+            raise PaperError(f"{symbol}: Bitget {candle_type} candles did not return an array")
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                raise PaperError(f"{symbol}: malformed Bitget {candle_type} candle row")
+            try:
+                stamp = decimal_value(row[0], "candle timestamp", positive=True)
+                if stamp != stamp.to_integral_value():
+                    raise PaperError(f"{symbol}: Bitget candle timestamp is not an integer")
+                timestamp = int(stamp)
+            except (ValueError, TypeError) as exc:
+                raise PaperError(f"{symbol}: invalid Bitget candle timestamp") from exc
+            if timestamp % 60_000:
+                raise PaperError(f"{symbol}: Bitget returned a non-minute-aligned candle")
+            if timestamp < chunk_first or timestamp > chunk_last:
+                continue
+            candle = {
+                "timestamp_ms": timestamp,
+                "open": decimal_value(row[1], "candle open", positive=True),
+                "high": decimal_value(row[2], "candle high", positive=True),
+                "low": decimal_value(row[3], "candle low", positive=True),
+                "close": decimal_value(row[4], "candle close", positive=True),
+            }
+            if candle["high"] < max(candle["open"], candle["close"], candle["low"]):
+                raise PaperError(f"{symbol}: inconsistent candle high")
+            if candle["low"] > min(candle["open"], candle["close"], candle["high"]):
+                raise PaperError(f"{symbol}: inconsistent candle low")
+            prior = found.get(timestamp)
+            if prior is not None and prior != candle:
+                raise PaperError(f"{symbol}: conflicting duplicate candle at {timestamp}")
+            found[timestamp] = candle
+    return [found[ts] for ts in sorted(found)]
 
 
 def fetch_funding_events(symbol: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
@@ -202,6 +259,23 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
             f"- Latest cumulative ROI: {report['portfolio'].get('portfolio_total_roi_pct')}%",
             f"- Closed trade records included: {len(report['portfolio'].get('closed_trades', []))}",
         ])
+        risk = report["portfolio"].get("risk", {})
+        strategy_risk = risk.get("strategy") or {}
+        latest_risk = risk.get("latest_interval") or {}
+        if strategy_risk:
+            lines.extend([
+                "", "## Intraday spread and drawdown", "",
+                f"- Strategy-level historical MDD: **{strategy_risk.get('max_drawdown_pct')}%**",
+                f"- MDD data quality: **{risk.get('quality_status')}**",
+                f"- Latest holding-interval status: **{latest_risk.get('status')}**",
+                f"- One-minute paired-bar coverage: {latest_risk.get('matched_minutes')}/{latest_risk.get('expected_minutes')} ({latest_risk.get('coverage_pct')}%)",
+                f"- Synthetic spread ratio open / high / low / close: {latest_risk.get('spread_open_ratio')} / {latest_risk.get('spread_high_ratio')} / {latest_risk.get('spread_low_ratio')} / {latest_risk.get('spread_close_ratio')}",
+                f"- Synthetic spread drawdown (low versus high): **{latest_risk.get('spread_drawdown_pct')}%**",
+                f"- Intraday NAV low: {latest_risk.get('nav_min_intraday')} USDT",
+                f"- Daily portfolio MDD: **{latest_risk.get('daily_mdd_pct')}%**",
+                "- Spread uses synchronized one-minute market-price OHLC. Portfolio MDD uses one-minute mark-price OHLC and actual paper quantities, cash and accrued funding.",
+                "- OHLC high/low envelopes are conservative intraminute estimates; candle data cannot reveal exact tick ordering. Missing minutes are flagged and are not used to update historical strategy MDD.",
+            ])
     if report.get("failure"):
         failure = report["failure"]
         lines.extend(["", "## Failure / block", "",
@@ -235,6 +309,30 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
                     realized_gross_pnl_cumulative,unrealized_pnl,fees_cumulative,funding_cumulative,
                     gross_exposure,long_symbol,short_symbol FROM daily_snapshots ORDER BY snapshot_date"""):
                     writer.writerow(row)
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if "risk_intervals" in tables:
+                with (output_dir / "daily_risk.csv").open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(["snapshot_date","status","long_symbol","short_symbol","expected_minutes",
+                        "matched_minutes","coverage_pct","spread_open_ratio","spread_high_ratio",
+                        "spread_low_ratio","spread_close_ratio","spread_drawdown_pct","nav_min_intraday",
+                        "daily_mdd_pct","strategy_mdd_pct","nav_after_rebalance","error"])
+                    for row in db.execute("""SELECT snapshot_date,status,long_symbol,short_symbol,
+                        expected_minutes,matched_minutes,coverage_pct,spread_open_ratio,spread_high_ratio,
+                        spread_low_ratio,spread_close_ratio,spread_drawdown_pct,nav_min_intraday,
+                        daily_mdd_pct,strategy_mdd_pct,nav_after_rebalance,error
+                        FROM risk_intervals ORDER BY snapshot_date"""):
+                        writer.writerow(row)
+            if "minute_metrics" in tables:
+                with (output_dir / "latest_minute_risk.csv").open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(["timestamp_ms","long_symbol","short_symbol","spread_ratio_close",
+                        "spread_ratio_high","spread_ratio_low","nav_close","nav_high","nav_low"])
+                    for row in db.execute("""SELECT timestamp_ms,long_symbol,short_symbol,spread_ratio_close,
+                        spread_ratio_high,spread_ratio_low,nav_close,nav_high,nav_low
+                        FROM minute_metrics WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM risk_intervals)
+                        ORDER BY timestamp_ms"""):
+                        writer.writerow(row)
         finally:
             db.close()
 
@@ -272,6 +370,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             paper = run_snapshot(report, db_path, depth_fetch=fetch_depth,
                 funding_fetch=fetch_funding_events, funding_mark_fetch=fetch_funding_mark,
+                candle_fetch=fetch_1m_candles,
                 initial_nav=D(args.initial_nav_usdt), fee_override=override)
             report["paper"] = paper
             report["status"] = "PAPER_UPDATED" if paper.get("updated") else paper.get("status", "PAPER_SKIPPED")
@@ -289,6 +388,8 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({"status":report.get("status"),"gates":report.get("gates"),
         "leaders":report.get("leaders"),"paper":report.get("paper"),
         "portfolio_roi_pct":report.get("portfolio",{}).get("portfolio_total_roi_pct"),
+        "strategy_mdd_pct":(report.get("portfolio",{}).get("risk",{}).get("strategy") or {}).get("max_drawdown_pct"),
+        "risk_quality":report.get("portfolio",{}).get("risk",{}).get("quality_status"),
         "failure":report.get("failure"),"orders":"NONE"},indent=2,sort_keys=True,default=str))
     if report["status"] in {"PAPER_BLOCKED","RANKING_BLOCKED","DIAGNOSTIC_ONLY_DEPTH_BLOCKED"}:
         return 1

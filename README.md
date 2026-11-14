@@ -26,12 +26,24 @@ The `trades` table records each leg's entry/exit, size, gross P&L, entry/exit fe
 
 A selected pair is not replaced by a runner-up if either selected contract has insufficient book depth or invalid contract metadata. The whole rebalance is rolled back and the previously persisted state remains unchanged. No partial fill is invented.
 
+## Minute spread and drawdown reconstruction
+
+At each successful daily transition, the workflow reconstructs the just-completed holding interval from Bitget's public one-minute contract candles. It uses no TradingView API.
+
+- **Synthetic spread:** long market-price ratio divided by short market-price ratio. For each synchronized minute, the conservative OHLC envelope uses `long high / short low` for the spread high and `long low / short high` for the spread low. Interval spread drawdown is `(spread low / spread high - 1) × 100`.
+- **Strategy equity and MDD:** mark-price candles are used with actual paper quantities, entry prices, starting cash and funding cashflows. For each minute, the NAV high uses the long mark high and short mark low; NAV low uses the long mark low and short mark high. The strategy-level peak-to-trough drawdown is calculated over the chained NAV observations and retained across daily pair changes.
+- **Intraminute limitation:** a one-minute OHLC bar does not reveal the exact order in which its high and low occurred, nor whether the legs' extreme prices printed at the same instant. The envelope is intentionally conservative and is an estimate, not tick-perfect execution or a liquidation model.
+- **Coverage policy:** both symbols must have matching market and mark candles for every complete minute in the interval before that interval can update historical intraday strategy MDD. Partial observations are reported with a coverage percentage but do not update the historical intraday MDD. Missing candle data never changes the frozen ranking and does not, by itself, block a valid paper rebalance.
+- The initial paper run has no prior holding interval; it initializes the strategy NAV peak. Subsequent daily runs measure the previous pair before closing it and opening the next pair.
+
+The SQLite database adds `strategy_risk`, `risk_intervals` and `minute_metrics`. Reports add `daily_risk.csv` and `latest_minute_risk.csv`; JSON/Markdown summaries show spread drawdown, daily MDD, historical strategy MDD and data coverage.
+
 ## Persistence and workflow
 
 - GitHub Actions schedule: **00:05 UTC daily** on `ubuntu-latest`.
 - The SQLite database is stored on the dedicated `bitget-paper-portfolio-state` branch and backed up with each workflow artifact.
 - The database includes `account`, `positions`, `trades`, `ledger` and `daily_snapshots` tables.
-- Reports include JSON, Markdown, `closed_trades.csv` and `daily_nav.csv`.
+- Reports include JSON, Markdown, `closed_trades.csv`, `daily_nav.csv`, `daily_risk.csv` and `latest_minute_risk.csv`.
 - First successful paper run initializes the account at **10,000 USDT** by default. `PAPER_INITIAL_NAV_USDT` can be set before the first run; initial NAV is immutable after the database exists.
 - The engine uses Bitget's public instrument `takerFeeRate` as a fee estimate. `BITGET_TAKER_FEE_RATE` can override it. This is not an account-specific fee quote; discounts/tier-specific rates may differ.
 

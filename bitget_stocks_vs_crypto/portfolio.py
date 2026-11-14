@@ -11,6 +11,8 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from pathlib import Path
 from typing import Any, Callable
 
+from .risk import analyse_intraday_risk
+
 D = Decimal
 
 
@@ -90,6 +92,35 @@ def init_db(path: str | Path, initial_nav: Decimal) -> sqlite3.Connection:
         short_position_json TEXT NOT NULL, long_fee_rate TEXT NOT NULL,
         short_fee_rate TEXT NOT NULL, ranking_run_at TEXT NOT NULL,
         closed_trades_count INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS strategy_risk(
+        id INTEGER PRIMARY KEY CHECK(id=1), peak_nav TEXT NOT NULL,
+        peak_time_ms INTEGER, max_drawdown_pct TEXT NOT NULL DEFAULT '0',
+        mdd_peak_nav TEXT, mdd_trough_nav TEXT,
+        mdd_peak_time_ms INTEGER, mdd_trough_time_ms INTEGER,
+        complete_intervals INTEGER NOT NULL DEFAULT 0,
+        incomplete_intervals INTEGER NOT NULL DEFAULT 0,
+        last_interval_status TEXT NOT NULL DEFAULT 'NOT_EVALUATED');
+      CREATE TABLE IF NOT EXISTS risk_intervals(
+        snapshot_date TEXT PRIMARY KEY, period_start_ms INTEGER, period_end_ms INTEGER NOT NULL,
+        long_symbol TEXT, short_symbol TEXT, expected_minutes INTEGER NOT NULL DEFAULT 0,
+        matched_minutes INTEGER NOT NULL DEFAULT 0, coverage_pct TEXT NOT NULL DEFAULT '0',
+        status TEXT NOT NULL, error TEXT,
+        spread_open_ratio TEXT, spread_high_ratio TEXT, spread_low_ratio TEXT,
+        spread_close_ratio TEXT, spread_drawdown_pct TEXT,
+        nav_start TEXT, nav_min_intraday TEXT, nav_min_time_ms INTEGER,
+        nav_close_intraday TEXT, nav_after_rebalance TEXT,
+        daily_mdd_pct TEXT, strategy_mdd_pct TEXT, strategy_peak_nav TEXT,
+        strategy_mdd_peak_nav TEXT, strategy_mdd_trough_nav TEXT,
+        strategy_mdd_peak_time_ms INTEGER, strategy_mdd_trough_time_ms INTEGER);
+      CREATE TABLE IF NOT EXISTS minute_metrics(
+        snapshot_date TEXT NOT NULL, timestamp_ms INTEGER NOT NULL,
+        long_symbol TEXT NOT NULL, short_symbol TEXT NOT NULL,
+        spread_ratio_close TEXT NOT NULL, spread_ratio_high TEXT NOT NULL,
+        spread_ratio_low TEXT NOT NULL, nav_close TEXT NOT NULL,
+        nav_high TEXT NOT NULL, nav_low TEXT NOT NULL,
+        PRIMARY KEY(snapshot_date,timestamp_ms),
+        FOREIGN KEY(snapshot_date) REFERENCES risk_intervals(snapshot_date));
+      CREATE INDEX IF NOT EXISTS minute_metrics_time_idx ON minute_metrics(snapshot_date,timestamp_ms);
     """)
     account = db.execute("SELECT * FROM account WHERE id=1").fetchone()
     if account is None:
@@ -212,6 +243,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                  depth_fetch: Callable[[str], dict[str, Any]],
                  funding_fetch: Callable[[str, int, int], list[dict[str, Any]]],
                  funding_mark_fetch: Callable[[str, int], Decimal],
+                 candle_fetch: Callable[[str, int, int, str], list[dict[str, Any]]] | None = None,
                  initial_nav: Decimal = D("10000"),
                  fee_override: Decimal | None = None) -> dict[str, Any]:
     if report.get("gates", {}).get("ranking") != "PASS":
@@ -240,6 +272,13 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                     "message": "A paper snapshot already exists for this UTC date; no duplicate trades were created."}
 
         old_positions = {r["leg"]: dict(r) for r in db.execute("SELECT * FROM positions")}
+        prior_snapshot_for_risk = db.execute(
+            "SELECT snapshot_date,as_of_ms,nav FROM daily_snapshots ORDER BY snapshot_date DESC LIMIT 1"
+        ).fetchone()
+        risk_market_candles: dict[str, list[dict[str, Any]]] = {}
+        risk_mark_candles: dict[str, list[dict[str, Any]]] = {}
+        risk_fetch_error: str | None = None
+        risk_period_start_ms = int(prior_snapshot_for_risk["as_of_ms"]) if prior_snapshot_for_risk else None
         markets = {m.get("symbol"): m for m in report.get("market_results", []) if isinstance(m, dict)}
         for symbol, expected in ((long_symbol, "stock"), (short_symbol, "crypto")):
             market = markets.get(symbol)
@@ -274,6 +313,25 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                                     "fundingRate": rate, "markPrice": mark})
             funding_by_leg[leg] = sorted(checked, key=lambda x: x["fundingTime"])
 
+        # Risk reconstruction is non-blocking: a candle-data outage must not change
+        # ranking or prevent otherwise valid paper accounting.
+        if old_positions and set(old_positions) == {"LONG", "SHORT"} and risk_period_start_ms is not None:
+            if candle_fetch is None:
+                risk_fetch_error = "No one-minute candle fetcher was supplied"
+            else:
+                try:
+                    for symbol in sorted({p["symbol"] for p in old_positions.values()}):
+                        risk_market_candles[symbol] = candle_fetch(symbol, risk_period_start_ms, as_of, "market")
+                        risk_mark_candles[symbol] = candle_fetch(symbol, risk_period_start_ms, as_of, "mark")
+                except Exception as exc:
+                    risk_fetch_error = f"{type(exc).__name__}: {str(exc)[:800]}"
+                    risk_market_candles.clear()
+                    risk_mark_candles.clear()
+        elif old_positions and risk_period_start_ms is None:
+            risk_fetch_error = "Existing positions have no preceding daily snapshot"
+        elif old_positions and set(old_positions) != {"LONG", "SHORT"}:
+            risk_fetch_error = "Prior portfolio does not contain exactly one LONG and one SHORT position"
+
         # Validate new leg execution sizing before opening the SQLite transaction.
         long_market, short_market = markets[long_symbol], markets[short_symbol]
         long_fee = fee_rate_for(long_market, fee_override)
@@ -285,11 +343,21 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
         realized = dec(account["realized_gross_pnl"], "realized P&L")
         fees = dec(account["fees_cumulative"], "cumulative fees")
         funding_total = dec(account["funding_cumulative"], "cumulative funding")
+        starting_cash = cash
         previous = db.execute("SELECT snapshot_date,as_of_ms,nav FROM daily_snapshots ORDER BY snapshot_date DESC LIMIT 1").fetchone()
         previous_nav = dec(previous["nav"], "previous NAV", positive=True) if previous else None
         hours_since = ((as_of - int(previous["as_of_ms"])) / 3_600_000) if previous else None
         count_before = db.execute("SELECT COUNT(*) FROM trades WHERE status='CLOSED'").fetchone()[0]
 
+        risk_state_row = db.execute("SELECT * FROM strategy_risk WHERE id=1").fetchone()
+        if risk_state_row is None:
+            seed_peak = max(initial_nav, previous_nav) if previous_nav is not None else initial_nav
+            seed_time = int(previous["as_of_ms"]) if previous else as_of
+            db.execute("""INSERT INTO strategy_risk(id,peak_nav,peak_time_ms,max_drawdown_pct)
+                          VALUES(?,?,?,'0')""", (1, fmt(seed_peak), seed_time))
+            risk_state_row = db.execute("SELECT * FROM strategy_risk WHERE id=1").fetchone()
+
+        funding_cashflows: list[dict[str, Any]] = []
         # Accrue every observed funding settlement for the existing positions.
         for leg, position in old_positions.items():
             qty = dec(position["qty"], "position quantity", positive=True)
@@ -298,6 +366,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                 rate, mark = event["fundingRate"], event["markPrice"]
                 direction = D("1") if leg == "LONG" else D("-1")
                 payment = -direction * qty * mark * rate
+                funding_cashflows.append({"time_ms": event["fundingTime"], "payment": fmt(payment)})
                 cash += payment
                 funding_total += payment
                 _insert_ledger(db, event_key=f"{trade_id}:funding:{event['fundingTime']}",
@@ -307,6 +376,32 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                     detail={"funding_mark_source": "Bitget historical 1m mark-price candle"})
                 db.execute("UPDATE trades SET funding_pnl=? WHERE trade_id=?",
                     (fmt(dec(db.execute("SELECT funding_pnl FROM trades WHERE trade_id=?", (trade_id,)).fetchone()[0], "trade funding") + payment), trade_id))
+
+        risk_analysis: dict[str, Any] | None = None
+        risk_status = "NO_PRIOR_POSITIONS"
+        risk_error = risk_fetch_error
+        if old_positions and set(old_positions) == {"LONG", "SHORT"} and previous is not None and not risk_fetch_error:
+            try:
+                risk_analysis = analyse_intraday_risk(
+                    start_ms=int(previous["as_of_ms"]), end_ms=as_of,
+                    long_position=old_positions["LONG"], short_position=old_positions["SHORT"],
+                    starting_cash=starting_cash, previous_nav=previous_nav,
+                    funding_cashflows=funding_cashflows,
+                    market_candles=risk_market_candles, mark_candles=risk_mark_candles,
+                    prior_peak_nav=dec(risk_state_row["peak_nav"], "strategy peak NAV", positive=True),
+                    prior_peak_time_ms=risk_state_row["peak_time_ms"],
+                    prior_mdd_pct=dec(risk_state_row["max_drawdown_pct"], "strategy MDD"),
+                    prior_mdd_peak_nav=dec(risk_state_row["mdd_peak_nav"], "MDD peak NAV") if risk_state_row["mdd_peak_nav"] is not None else None,
+                    prior_mdd_trough_nav=dec(risk_state_row["mdd_trough_nav"], "MDD trough NAV") if risk_state_row["mdd_trough_nav"] is not None else None,
+                    prior_mdd_peak_time_ms=risk_state_row["mdd_peak_time_ms"],
+                    prior_mdd_trough_time_ms=risk_state_row["mdd_trough_time_ms"],
+                )
+                risk_status = risk_analysis.get("status", "INCOMPLETE")
+            except Exception as exc:
+                risk_error = f"{type(exc).__name__}: {str(exc)[:800]}"
+                risk_status = "UNAVAILABLE"
+        elif old_positions:
+            risk_status = "UNAVAILABLE"
 
         # Close both old legs at the visible opposing side of the public book.
         for leg in ("LONG", "SHORT"):
@@ -399,6 +494,91 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
             raise PaperError("Portfolio NAV is non-positive; refusing to commit snapshot")
         daily_return = (nav/previous_nav-D("1"))*D("100") if previous_nav else None
         total_return = (nav/initial_nav-D("1"))*D("100")
+
+        # Merge complete minute history into the strategy risk state. On an
+        # incomplete interval, only the observed rebalance NAV endpoint is used;
+        # the report permanently flags that the historical MDD sample has a gap.
+        peak_nav = dec(risk_state_row["peak_nav"], "strategy peak NAV", positive=True)
+        peak_time_ms = risk_state_row["peak_time_ms"]
+        mdd_pct = dec(risk_state_row["max_drawdown_pct"], "strategy MDD")
+        mdd_peak_nav = dec(risk_state_row["mdd_peak_nav"], "MDD peak NAV") if risk_state_row["mdd_peak_nav"] is not None else None
+        mdd_trough_nav = dec(risk_state_row["mdd_trough_nav"], "MDD trough NAV") if risk_state_row["mdd_trough_nav"] is not None else None
+        mdd_peak_time_ms = risk_state_row["mdd_peak_time_ms"]
+        mdd_trough_time_ms = risk_state_row["mdd_trough_time_ms"]
+        if risk_status == "COMPLETE" and risk_analysis is not None:
+            peak_nav = dec(risk_analysis["strategy_peak_nav"], "reconstructed peak NAV", positive=True)
+            peak_time_ms = risk_analysis.get("strategy_peak_time_ms")
+            mdd_pct = dec(risk_analysis["strategy_mdd_pct"], "reconstructed MDD")
+            mdd_peak_nav = dec(risk_analysis["strategy_mdd_peak_nav"], "reconstructed MDD peak") if risk_analysis.get("strategy_mdd_peak_nav") is not None else None
+            mdd_trough_nav = dec(risk_analysis["strategy_mdd_trough_nav"], "reconstructed MDD trough") if risk_analysis.get("strategy_mdd_trough_nav") is not None else None
+            mdd_peak_time_ms = risk_analysis.get("strategy_mdd_peak_time_ms")
+            mdd_trough_time_ms = risk_analysis.get("strategy_mdd_trough_time_ms")
+        if nav > peak_nav:
+            peak_nav, peak_time_ms = nav, as_of
+        endpoint_dd = (nav / peak_nav - D("1")) * D("100")
+        if endpoint_dd < mdd_pct:
+            mdd_pct = endpoint_dd
+            mdd_peak_nav, mdd_trough_nav = peak_nav, nav
+            mdd_peak_time_ms, mdd_trough_time_ms = peak_time_ms or as_of, as_of
+
+        daily_peak_nav = (dec(risk_analysis["daily_peak_nav"], "daily peak NAV", positive=True)
+                          if risk_analysis and risk_analysis.get("daily_peak_nav") is not None
+                          else (previous_nav if previous_nav is not None else initial_nav))
+        daily_mdd_pct = (dec(risk_analysis["daily_mdd_pct"], "daily MDD")
+                         if risk_analysis and risk_analysis.get("daily_mdd_pct") is not None else D("0"))
+        if nav > daily_peak_nav:
+            daily_peak_nav = nav
+        daily_mdd_pct = min(daily_mdd_pct, (nav / daily_peak_nav - D("1")) * D("100"))
+
+        complete_count = int(risk_state_row["complete_intervals"])
+        incomplete_count = int(risk_state_row["incomplete_intervals"])
+        if old_positions and risk_status == "COMPLETE":
+            complete_count += 1
+        elif old_positions:
+            incomplete_count += 1
+        db.execute("""UPDATE strategy_risk SET peak_nav=?,peak_time_ms=?,max_drawdown_pct=?,
+            mdd_peak_nav=?,mdd_trough_nav=?,mdd_peak_time_ms=?,mdd_trough_time_ms=?,
+            complete_intervals=?,incomplete_intervals=?,last_interval_status=? WHERE id=1""",
+            (fmt(peak_nav), peak_time_ms, fmt(mdd_pct),
+             fmt(mdd_peak_nav) if mdd_peak_nav is not None else None,
+             fmt(mdd_trough_nav) if mdd_trough_nav is not None else None,
+             mdd_peak_time_ms, mdd_trough_time_ms, complete_count, incomplete_count, risk_status))
+
+        held_long = old_positions.get("LONG", {}).get("symbol")
+        held_short = old_positions.get("SHORT", {}).get("symbol")
+        analysis = risk_analysis or {}
+        db.execute("""INSERT INTO risk_intervals(
+            snapshot_date,period_start_ms,period_end_ms,long_symbol,short_symbol,
+            expected_minutes,matched_minutes,coverage_pct,status,error,
+            spread_open_ratio,spread_high_ratio,spread_low_ratio,spread_close_ratio,spread_drawdown_pct,
+            nav_start,nav_min_intraday,nav_min_time_ms,nav_close_intraday,nav_after_rebalance,
+            daily_mdd_pct,strategy_mdd_pct,strategy_peak_nav,strategy_mdd_peak_nav,
+            strategy_mdd_trough_nav,strategy_mdd_peak_time_ms,strategy_mdd_trough_time_ms)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (date, int(previous["as_of_ms"]) if previous else None, as_of,
+             held_long, held_short, int(analysis.get("expected_minutes", 0)),
+             int(analysis.get("matched_minutes", 0)), str(analysis.get("coverage_pct", "0")),
+             risk_status, risk_error,
+             analysis.get("spread_open_ratio"), analysis.get("spread_high_ratio"),
+             analysis.get("spread_low_ratio"), analysis.get("spread_close_ratio"),
+             analysis.get("spread_drawdown_pct"),
+             analysis.get("nav_start", fmt(previous_nav) if previous_nav is not None else fmt(initial_nav)),
+             analysis.get("nav_low"), analysis.get("nav_low_time_ms"), analysis.get("nav_close"),
+             fmt(nav), fmt(daily_mdd_pct), fmt(mdd_pct), fmt(peak_nav),
+             fmt(mdd_peak_nav) if mdd_peak_nav is not None else None,
+             fmt(mdd_trough_nav) if mdd_trough_nav is not None else None,
+             mdd_peak_time_ms, mdd_trough_time_ms))
+        if risk_analysis:
+            for point in risk_analysis.get("minute_rows", []):
+                db.execute("""INSERT INTO minute_metrics(
+                    snapshot_date,timestamp_ms,long_symbol,short_symbol,
+                    spread_ratio_close,spread_ratio_high,spread_ratio_low,
+                    nav_close,nav_high,nav_low) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (date, int(point["timestamp_ms"]), held_long, held_short,
+                     point["spread_ratio_close"], point["spread_ratio_high"],
+                     point["spread_ratio_low"], point["nav_close"], point["nav_high"],
+                     point["nav_low"]))
+
         closed_count = db.execute("SELECT COUNT(*) FROM trades WHERE status='CLOSED' AND exit_date=?", (date,)).fetchone()[0]
         db.execute("""INSERT INTO daily_snapshots(
           snapshot_date,as_of_ms,long_symbol,short_symbol,nav,cash,unrealized_pnl,
@@ -423,6 +603,14 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                 "total_return_pct":fmt(total_return),"realized_gross_pnl_cumulative_usdt":fmt(realized),
                 "fees_cumulative_usdt":fmt(fees),"funding_cumulative_usdt":fmt(funding_total),
                 "gross_exposure_usdt":fmt(gross_exposure),"gross_exposure_to_nav":fmt(gross_exposure/nav),
+                "daily_mdd_pct":fmt(daily_mdd_pct),"strategy_mdd_pct":fmt(mdd_pct),
+                "strategy_mdd_status":("PARTIAL_DATA" if incomplete_count > 0 else
+                    ("OBSERVED" if complete_count > 0 else "MINUTE_HISTORY_NOT_STARTED")),
+                "intraday_risk_status":risk_status,
+                "spread_drawdown_pct":analysis.get("spread_drawdown_pct"),
+                "spread_ratio_low":analysis.get("spread_low_ratio"),
+                "spread_ratio_high":analysis.get("spread_high_ratio"),
+                "minute_coverage_pct":analysis.get("coverage_pct","0"),
                 "open_positions":{leg:json.loads(raw) for leg,raw in position_json.items()},
                 "closed_trades_today":closed_trades}}
     except Exception:
@@ -453,9 +641,24 @@ def trade_report(db_path: str | Path) -> dict[str, Any]:
         if snap_dict:
             snap_dict["long_position"] = json.loads(snap_dict.pop("long_position_json"))
             snap_dict["short_position"] = json.loads(snap_dict.pop("short_position_json"))
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if {"strategy_risk", "risk_intervals"}.issubset(tables):
+            risk_state = db.execute("SELECT * FROM strategy_risk WHERE id=1").fetchone()
+            latest_interval = db.execute("SELECT * FROM risk_intervals ORDER BY snapshot_date DESC LIMIT 1").fetchone()
+            recent_intervals = db.execute("SELECT * FROM risk_intervals ORDER BY snapshot_date DESC LIMIT 100").fetchall()
+        else:
+            risk_state = latest_interval = None
+            recent_intervals = []
+        risk_dict = dict(risk_state) if risk_state else None
+        interval_dict = dict(latest_interval) if latest_interval else None
+        risk_quality = ("NO_MINUTE_HISTORY" if not risk_dict or
+                        (risk_dict["complete_intervals"] == 0 and risk_dict["incomplete_intervals"] == 0)
+                        else ("COMPLETE" if risk_dict["incomplete_intervals"] == 0 else "PARTIAL_DATA"))
         return {"status":"OK","initial_nav_usdt":account["initial_nav"] if account else None,
             "latest_snapshot":snap_dict,"open_trades":[dict(x) for x in open_rows],
             "closed_trades":[dict(x) for x in closed],
-            "portfolio_total_roi_pct":snap_dict.get("total_return_pct") if snap_dict else None}
+            "portfolio_total_roi_pct":snap_dict.get("total_return_pct") if snap_dict else None,
+            "risk":{"quality_status":risk_quality,"strategy":risk_dict,
+                    "latest_interval":interval_dict,"recent_intervals":[dict(x) for x in recent_intervals]}}
     finally:
         db.close()

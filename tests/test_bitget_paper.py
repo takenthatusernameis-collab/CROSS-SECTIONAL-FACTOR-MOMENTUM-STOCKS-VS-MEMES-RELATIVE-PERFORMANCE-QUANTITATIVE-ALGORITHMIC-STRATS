@@ -133,6 +133,58 @@ class PaperLedgerTests(unittest.TestCase):
             self.assertTrue(any(D(row["funding_pnl"]) != 0 for row in closed))
             self.assertIsNotNone(view["portfolio_total_roi_pct"])
 
+    def test_second_snapshot_persists_minute_spread_and_strategy_mdd(self):
+        day1 = 1_800_000_000_000
+        day2 = day1 + 86_400_000
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "paper.sqlite3"
+            first_books = books(day1)
+            run_snapshot(ranking(day1), db_path,
+                depth_fetch=lambda symbol: first_books[symbol],
+                funding_fetch=lambda symbol, start, end: [],
+                funding_mark_fetch=lambda symbol, timestamp: D("100"),
+                initial_nav=D("10000"))
+
+            def candle_fetch(symbol, start_ms, end_ms, candle_type):
+                rows = []
+                for minute in range(1440):
+                    ts = start_ms + minute * 60_000
+                    if symbol == "STOCKUSDT":
+                        if candle_type == "mark" and minute == 600:
+                            values = ("100", "101", "80", "90")
+                        elif candle_type == "market" and minute == 600:
+                            values = ("100", "102", "98", "100")
+                        else:
+                            values = ("100", "101", "99", "100")
+                    else:
+                        if candle_type == "mark" and minute == 600:
+                            values = ("10", "15", "9", "12")
+                        elif candle_type == "market" and minute == 600:
+                            values = ("10", "10.5", "9.5", "10")
+                        else:
+                            values = ("10", "10.1", "9.9", "10")
+                    rows.append({"timestamp_ms": ts, "open": values[0], "high": values[1],
+                                 "low": values[2], "close": values[3]})
+                return rows
+
+            second_books = books(day2, stock_bid="102", stock_ask="102.1",
+                                 crypto_bid="9.4", crypto_ask="9.41")
+            result = run_snapshot(ranking(day2, stock_price="102.05", crypto_price="9.405"),
+                db_path, depth_fetch=lambda symbol: second_books[symbol],
+                funding_fetch=lambda symbol, start, end: [],
+                funding_mark_fetch=lambda symbol, timestamp: D("100"),
+                candle_fetch=candle_fetch, initial_nav=D("10000"))
+            self.assertEqual(result["status"], "UPDATED")
+            view = trade_report(db_path)
+            risk = view["risk"]
+            self.assertEqual(risk["latest_interval"]["status"], "COMPLETE")
+            self.assertEqual(risk["latest_interval"]["expected_minutes"], 1440)
+            self.assertEqual(risk["latest_interval"]["matched_minutes"], 1440)
+            self.assertLess(D(risk["latest_interval"]["spread_drawdown_pct"]), D("0"))
+            self.assertLess(D(risk["strategy"]["max_drawdown_pct"]), D("0"))
+            self.assertEqual(risk["strategy"]["complete_intervals"], 1)
+            self.assertEqual(risk["strategy"]["incomplete_intervals"], 0)
+
     def test_insufficient_depth_does_not_mutate_existing_state(self):
         day1 = 1_800_000_000_000
         day2 = day1 + 86_400_000
