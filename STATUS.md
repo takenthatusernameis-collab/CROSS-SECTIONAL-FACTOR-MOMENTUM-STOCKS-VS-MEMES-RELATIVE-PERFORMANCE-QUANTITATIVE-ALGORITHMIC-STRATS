@@ -1,55 +1,97 @@
 # Bitget Stocks vs Crypto — Paper Portfolio Status
 
-> **Paper-only simulation.** No exchange orders are placed. Market data is sourced from Bitget public endpoints.
+> **Paper-only simulation.** No exchange orders are placed. Market data comes from Bitget public endpoints.
 
-## Reset baseline
+## At a glance
 
-
-The previous paper account, open-position records, trade ledger and performance history have been cleared from the active state branch. The new campaign starts with **10 USDT** of starting capital.
-
-| Metric | Reset baseline |
+| Metric | Latest value |
 |---|---:|
-| Starting capital | **10.00 USDT** |
-| Current NAV before first pair | 10.00 USDT |
-| Cumulative P&L | 0.00 USDT |
-| Portfolio ROI | 0.00% |
-| Open positions | 0 |
+| Current NAV | **9.98 USDT** |
+| Starting capital | 10.00 USDT |
+| NAV change vs starting capital | **-0.02 USDT** |
+| Portfolio ROI vs starting capital | **-0.24%** |
+| Current-cycle ROI | Not available |
+| Unrealized P&L (gross) | -0.01 USDT |
+| Cumulative realized gross P&L | 0.00 USDT |
+| Fees paid to date | 0.01 USDT |
+| Funding posted to ledger | 0.00 USDT |
+| Estimated funding pending | 0.00 USDT |
+| Gross exposure | 17.36 USDT |
 | Closed trades | 0 |
-| Recorded equity points | 1 (initial-capital baseline) |
-| Realized trade P&L | 0.00 USDT |
-| Fees | 0.00 USDT |
-| Funding | 0.00 USDT |
 
-This is the starting-balance baseline, not a live mark or a completed strategy observation. The first successful scheduled or manual paper run will open the new pair and replace this page with live metrics.
+_NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values as of 2026-11-14 02:28:02 UTC._
+
+## Latest workflow result
+
+- **Paper runner status:** **PAPER_UPDATED**
+- **Ranking data gate:** PASS
+- **Monitoring operation:** not supplied
+- **Age of latest saved mark/snapshot:** 6 minutes
 
 ## Lifetime strategy performance
 
-- **Annualized Sortino ratio:** Not yet available.
-- **Sortino observations:** 0 daily close-to-close returns; requires at least 20 daily returns and 5 negative days.
-- **Minimum acceptable return:** 0% per day.
-- **Annualization:** √365.
-- **Maximum drawdown:** Not yet established.
-- **Trade history:** Empty by design; all new open and closed trades will be retained from this reset onward.
+- **Initial capital:** 10.00 USDT
+- **Current equity P&L vs initial capital:** **-0.02 USDT**
+- **Lifetime portfolio ROI:** **-0.24%**
+- **Equity-curve observations:** 2
+- **Closed trades:** 0 | **Open trades:** 2
+- **Realized net P&L on closed trades:** 0.00 USDT
+- **Closed-trade win rate:** Not available
+- **Profit factor:** Not available
+- **Annualized Sortino ratio:** **Not yet statistically available**
+- **Sortino status:** INSUFFICIENT_HISTORY: 0/20 daily returns
+- **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
+- **Sampled equity-curve MDD:** -0.24%
 
 ![Portfolio equity curve](equity_curve.svg)
-
 [Complete equity curve CSV](equity_curve.csv) · [Daily equity and returns](daily_equity.csv) · [Complete trade history](trade_history.csv)
+
+### Full trade history
+
+| Trade | Entry date | Leg | Contract | Status | Entry price | Exit price | Net P&L | Trade ROI |
+|---:|---|---|---|---|---:|---:|---:|---:|
+| 1 | 2026-11-14 | LONG | SOXSUSDT | OPEN | 52.82500000 | — | — USDT | Not available |
+| 2 | 2026-11-14 | SHORT | BANANAS31USDT | OPEN | 0.00391800 | — | — USDT | Not available |
+
+Sortino remains unavailable until enough daily observations exist; no ratio is inferred from a short initial sample.
+
 
 ## Open positions
 
-No open positions yet.
+| Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
+|---|---|---:|---:|---:|---:|---:|
+| LONG | SOXSUSDT | 0.180000 | 52.82500000 | 52.83000000 | 0.00 USDT | -0.05% |
+| SHORT | BANANAS31USDT | 2,000.000000 | 0.00391800 | 0.00392500 | -0.01 USDT | -0.24% |
+
+## Risk
+
+- **Strategy maximum drawdown:** Not available (not established from minute history yet)
+- **Current holding-cycle MDD:** Not available (not established yet)
+- **Minute-data coverage:** not started; awaiting first completed one-minute interval
+- **Risk-data quality:** **NO_MINUTE_HISTORY**
+- **Historical risk intervals:** 0 complete / 0 incomplete
+- **Latest completed risk interval:** NO_PRIOR_POSITIONS
 
 ## Cooldown safeguard
 
-- **Cooldown flag:** READY (0).
-- The first successful paper run will construct the opening long/short pair using Bitget's latest ranking and public depth checks.
-- On successful construction, the 24-hour binary cooldown will activate.
+- **Cooldown flag:** **ACTIVE (1)**
+- Activated: 2026-11-14 02:27:58 UTC
+- Scheduled reset: 2026-11-15 02:28:00 UTC
+- Current cycle start: 2026-11-14 02:27:58 UTC
+- A new pair is built only when the binary flag is 0 and the ranking/depth/accounting gates pass.
 
-## Reset and provenance
+## Timestamps and provenance
 
-- **Reset timestamp:** 2026-11-14T02:21:47.080Z
-- **Starting capital:** 10 USDT.
-- **Next action:** the first successful scheduled or manual `mode=paper` run will initialize the SQLite ledger, open positions, and begin equity tracking.
-- **Trading boundary:** simulation only; no exchange orders or account endpoints.
+- **STATUS.md generated:** 2026-11-14 02:34:07 UTC
+- **Paper workflow started:** 2026-11-14 02:34:04 UTC
+- **Latest saved market observation:** 2026-11-14 02:28:02 UTC
+- **Workflow trigger:** **push / paper**
+- **GitHub Actions run:** [43547015380](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/43547015380)
 
-The durable database will be created on the first successful paper run. The `RESET_PENDING.md` marker is temporary and is removed when the new database and reports are committed together.
+## Interpretation notes
+
+- NAV includes cash and mark-to-market unrealized P&L. Open-leg unrealized P&L is gross; an estimated exit fee has not yet been charged.
+- Pending funding is an estimate and is not posted to the accounting ledger until the next successful rebalance.
+- Without a current-pair monitor observation, marks fall back to the entry-time snapshot and are not live quotes.
+- MDD is identified as unavailable until supported by minute-level observations; incomplete coverage is shown explicitly.
+- This page is derived from the durable SQLite ledger after a successful paper run. The database remains the accounting source of truth.
