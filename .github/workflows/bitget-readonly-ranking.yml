@@ -1,0 +1,64 @@
+name: Bitget Read-only Stock vs Crypto Perpetual Ranking Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bitget-readonly-ranking.yml'
+      - 'scripts/probe_bitget_ranking.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bitget-readonly-ranking-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ranking-diagnostic:
+    name: Public Bitget ranking and depth test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile diagnostic
+        run: python -m py_compile scripts/probe_bitget_ranking.py
+
+      - name: Run read-only Bitget ranking and depth diagnostic
+        id: diagnostic
+        shell: bash
+        run: |
+          set +e
+          python scripts/probe_bitget_ranking.py
+          result=$?
+          echo "exit_code=${result}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload JSON and Markdown report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitget-readonly-ranking-${{ github.run_id }}
+          path: artifacts/bitget-readonly-ranking/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce read-only ranking and depth gate
+        if: always() && steps.diagnostic.outcome == 'success'
+        shell: bash
+        run: |
+          if [ "${{ steps.diagnostic.outputs.exit_code }}" != "0" ]; then
+            echo 'Bitget ranking/depth diagnostic did not pass. Review the uploaded report.'
+            exit 1
+          fi
