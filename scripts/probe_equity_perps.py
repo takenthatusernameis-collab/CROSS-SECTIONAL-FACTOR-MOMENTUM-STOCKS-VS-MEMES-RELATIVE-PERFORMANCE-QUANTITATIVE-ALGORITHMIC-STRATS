@@ -205,7 +205,7 @@ def probe_bitget() -> dict[str, Any]:
         "scan": classification_scan(tax_rows if tax_rows else contracts),
         "source_used": "v3_contract_catalog" if tax_rows else "v2_contract_catalog_fallback",
     }
-        targets={"TSLAUSDT","AAPLUSDT","NVDAUSDT","MSTRUSDT","GOOGLUSDT"}
+    targets={"TSLAUSDT","AAPLUSDT","NVDAUSDT","MSTRUSDT","GOOGLUSDT"}
     q=next((x for x in contracts if str(x.get("symbol","")).upper() in targets),None)
     rwa=[x for x in contracts if str(x.get("isRwa","")).upper()=="YES"]
     r["market_found"]=q is not None
