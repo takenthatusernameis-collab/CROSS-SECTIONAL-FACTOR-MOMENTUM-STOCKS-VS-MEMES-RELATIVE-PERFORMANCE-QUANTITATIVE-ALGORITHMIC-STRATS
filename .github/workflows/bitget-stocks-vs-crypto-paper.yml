@@ -137,9 +137,17 @@ jobs:
           test -s "$PAPER_DB"
           DB_COPY="$RUNNER_TEMP/bitget_paper.sqlite3"
           cp "$PAPER_DB" "$DB_COPY"
+          # Keep the artifact copy safe even if a later Git branch operation fails.
+          trap 'if [[ -s "$DB_COPY" ]]; then mkdir -p "$(dirname "$PAPER_DB")"; cp "$DB_COPY" "$PAPER_DB"; fi' EXIT
+
           STATE_BRANCH="bitget-paper-portfolio-state"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # The database is untracked on main. Remove that working-tree path before
+          # checking out the state branch, where the same path is already tracked.
+          rm -f "$PAPER_DB"
+
           if git fetch --no-tags origin "+refs/heads/${STATE_BRANCH}:refs/remotes/origin/${STATE_BRANCH}"; then
             git checkout -B "$STATE_BRANCH" "refs/remotes/origin/${STATE_BRANCH}"
           else
