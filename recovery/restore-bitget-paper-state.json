@@ -11,5 +11,6 @@
   },
   "expected_open_trades": 2,
   "expected_cooldown": 1,
-  "expected_reset_at_ms": 1794709680000
+  "expected_reset_at_ms": 1794709680000,
+  "recovery_attempt": 2
 }
