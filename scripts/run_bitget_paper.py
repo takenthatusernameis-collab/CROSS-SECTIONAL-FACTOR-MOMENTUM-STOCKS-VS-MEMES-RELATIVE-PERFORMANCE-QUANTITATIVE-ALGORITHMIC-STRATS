@@ -18,7 +18,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bitget_stocks_vs_crypto.market import MarketDataError, decimal_value, get_json, build_ranking_report
-from bitget_stocks_vs_crypto.portfolio import (PaperError, fee_rate_for, parse_book, run_snapshot, size_for_target_notional, trade_report)
+from bitget_stocks_vs_crypto.portfolio import (PaperError, fee_rate_for, parse_book, rebalance_gate, run_snapshot, size_for_target_notional, trade_report)
+from bitget_stocks_vs_crypto.monitor import monitor_open_positions
 from bitget_stocks_vs_crypto.risk import expected_minute_starts
 
 
@@ -137,6 +138,48 @@ def fetch_1m_candles(symbol: str, start_ms: int, end_ms: int, candle_type: str) 
     return [found[ts] for ts in sorted(found)]
 
 
+def fetch_monitor_tickers(symbols: list[str], now_ms: int) -> dict[str, dict[str, Any]]:
+    """Fetch one public ticker snapshot and return validated marks for held symbols."""
+    payload, _ = get_json("/api/v3/market/tickers", {"category": "USDT-FUTURES"}, stage="monitor_tickers")
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        raise PaperError("Bitget monitoring ticker response is not an array")
+    wanted = set(symbols)
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("symbol") not in wanted:
+            continue
+        symbol = row["symbol"]
+        if symbol in result:
+            raise PaperError(f"{symbol}: duplicate monitoring ticker")
+        stamp = decimal_value(row.get("ts"), f"{symbol} ticker timestamp", positive=True)
+        if stamp != stamp.to_integral_value():
+            raise PaperError(f"{symbol}: ticker timestamp is not an integer")
+        if abs(int(now_ms) - int(stamp)) > 900_000:
+            raise PaperError(f"{symbol}: monitoring ticker is stale")
+        result[symbol] = {
+            "timestamp_ms": int(stamp),
+            "mark_price": str(decimal_value(row.get("markPrice"), f"{symbol} markPrice", positive=True)),
+            "last_price": str(decimal_value(row.get("lastPrice"), f"{symbol} lastPrice", positive=True)),
+        }
+    missing = wanted - set(result)
+    if missing:
+        raise PaperError(f"Missing Bitget monitoring tickers for {sorted(missing)}")
+    return result
+
+
+def fetch_server_time_ms() -> int:
+    payload, _ = get_json("/api/v3/market/time", stage="monitor_server_time")
+    data = payload.get("data")
+    raw = data.get("serverTime", data.get("ts")) if isinstance(data, dict) else data
+    if raw is None:
+        raw = payload.get("requestTime")
+    stamp = decimal_value(raw, "Bitget server time", positive=True)
+    if stamp != stamp.to_integral_value():
+        raise PaperError("Bitget server timestamp is not an integer")
+    return int(stamp)
+
+
 def fetch_funding_events(symbol: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
     found: dict[int, dict[str, Any]] = {}
     for page in range(1, 6):
@@ -199,7 +242,7 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
         json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
     lines = [
-        "# Bitget Stocks vs Crypto — Daily Paper Portfolio", "",
+        "# Bitget Stocks vs Crypto — Five-Minute Paper Monitor", "",
         f"- Status: **{report.get('status')}**",
         f"- Run UTC: {report.get('run_at_utc')}",
         f"- Ranking server timestamp: {report.get('as_of_server_time_ms')}",
@@ -209,7 +252,7 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
         "- Long the highest 24-hour gainer among active USDT stock perpetuals.",
         "- Short the lowest 24-hour performer among active USDT crypto perpetuals.",
         "- One long and one short; target notional is 1× NAV per leg (2× gross).",
-        "- Rebalance at most once per UTC date. A failed liquidity/data gate does not select a runner-up.",
+        "- Rebalance only after the persistent entry-time cooldown plus the required completed one-minute candle; a same-date idempotency check remains as a secondary safeguard.",
         "- Ranking uses Bitget's reported price24hPcnt; the raw decimal is multiplied by 100 for display.", "",
         "## Current ranking", "",
     ]
@@ -276,6 +319,29 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
                 "- Spread uses synchronized one-minute market-price OHLC. Portfolio MDD uses one-minute mark-price OHLC and actual paper quantities, cash and accrued funding.",
                 "- OHLC high/low envelopes are conservative intraminute estimates; candle data cannot reveal exact tick ordering. Missing minutes are flagged and are not used to update historical strategy MDD.",
             ])
+    monitoring = report.get("monitoring")
+    gate = report.get("rebalance_gate")
+    if gate:
+        lines.extend(["", "## Persistent rebalance safeguard", "",
+            f"- Gate: **{gate.get('reason')}**",
+            f"- Eligible after (UTC ms): {gate.get('eligible_after_ms')}",
+            f"- Seconds remaining at workflow start: {gate.get('seconds_remaining')}",
+            "- The first run that starts after eligibility may rebalance; exact cron/expiry coincidence is not required.",
+        ])
+    if monitoring:
+        lines.extend(["", "## Five-minute open-position monitoring", "",
+            f"- Monitoring status: **{monitoring.get('status')}**",
+            f"- Marked NAV: {monitoring.get('nav_usdt')} USDT | portfolio ROI: {monitoring.get('portfolio_roi_pct')}%",
+            f"- Pending estimated funding (not yet posted to accounting ledger): {monitoring.get('funding_pending_usdt')} USDT",
+            f"- Synthetic spread mark: {monitoring.get('spread_ratio_mark')} | observed high/low: {monitoring.get('spread_high_ratio')} / {monitoring.get('spread_low_ratio')}",
+            f"- Spread drawdown: {monitoring.get('spread_drawdown_pct')}% | holding-cycle MDD: {monitoring.get('daily_mdd_pct')}% | strategy MDD: {monitoring.get('strategy_mdd_pct')}%",
+            f"- Minute coverage: {monitoring.get('matched_minutes')}/{monitoring.get('expected_minutes')} ({monitoring.get('coverage_pct')}%)",
+            f"- Seconds to rebalance eligibility: {monitoring.get('seconds_to_rebalance')}",
+        ])
+        for leg, position in monitoring.get("open_positions", {}).items():
+            lines.append(f"- {leg}: {position.get('symbol')} | mark {position.get('mark_price')} | unrealized {position.get('unrealized_pnl_usdt')} USDT | estimated net leg ROI {position.get('net_trade_roi_estimate_pct')}%")
+        if monitoring.get("last_error"):
+            lines.append(f"- Monitoring data warning: {monitoring.get('last_error')}")
     if report.get("failure"):
         failure = report["failure"]
         lines.extend(["", "## Failure / block", "",
@@ -323,14 +389,21 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
                         daily_mdd_pct,strategy_mdd_pct,nav_after_rebalance,error
                         FROM risk_intervals ORDER BY snapshot_date"""):
                         writer.writerow(row)
-            if "minute_metrics" in tables:
+            if "monitor_observations" in tables:
+                with (output_dir / "intraday_monitor.csv").open("w", newline="", encoding="utf-8") as handle:
+                    writer = csv.writer(handle)
+                    writer.writerow(["observed_at_ms","cycle_start_ms","eligible_after_ms","status","nav_usdt","portfolio_roi_pct","funding_pending_usdt","long_symbol","long_mark_price","long_unrealized_pnl_usdt","long_trade_roi_pct","short_symbol","short_mark_price","short_unrealized_pnl_usdt","short_trade_roi_pct","spread_ratio_mark","spread_high_ratio","spread_low_ratio","spread_drawdown_pct","daily_mdd_pct","strategy_mdd_pct","expected_minutes","matched_minutes","coverage_pct","seconds_to_rebalance","last_error"])
+                    for row in db.execute("""SELECT observed_at_ms,cycle_start_ms,eligible_after_ms,status,nav_usdt,portfolio_roi_pct,funding_pending_usdt,long_symbol,long_mark_price,long_unrealized_pnl_usdt,long_trade_roi_pct,short_symbol,short_mark_price,short_unrealized_pnl_usdt,short_trade_roi_pct,spread_ratio_mark,spread_high_ratio,spread_low_ratio,spread_drawdown_pct,daily_mdd_pct,strategy_mdd_pct,expected_minutes,matched_minutes,coverage_pct,seconds_to_rebalance,last_error FROM monitor_observations ORDER BY observed_at_ms"""):
+                        writer.writerow(row)
+            if "monitor_minute_metrics" in tables:
                 with (output_dir / "latest_minute_risk.csv").open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.writer(handle)
                     writer.writerow(["timestamp_ms","long_symbol","short_symbol","spread_ratio_close",
                         "spread_ratio_high","spread_ratio_low","nav_close","nav_high","nav_low"])
                     for row in db.execute("""SELECT timestamp_ms,long_symbol,short_symbol,spread_ratio_close,
                         spread_ratio_high,spread_ratio_low,nav_close,nav_high,nav_low
-                        FROM minute_metrics WHERE snapshot_date=(SELECT MAX(snapshot_date) FROM risk_intervals)
+                        FROM monitor_minute_metrics
+                        WHERE cycle_start_ms=(SELECT MAX(cycle_start_ms) FROM monitor_minute_metrics)
                         ORDER BY timestamp_ms"""):
                         writer.writerow(row)
         finally:
@@ -347,51 +420,148 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     db_path = Path(args.db_path)
     out = Path(args.output_dir)
+    # Capture job start BEFORE ranking/API work. A job started before cooldown
+    # expiry cannot rebalance even if its market-data calls finish afterwards.
+    run_started_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     report = build_ranking_report()
     report["paper"] = None
+    report["monitoring"] = None
     report["portfolio"] = trade_report(db_path)
     override = D(args.fee_rate) if args.fee_rate not in (None, "") else None
-    if report.get("gates", {}).get("ranking") == "PASS" and args.diagnostic_only:
-        try:
-            report["execution_preflight"] = read_only_execution_preflight(
-                report, D(args.initial_nav_usdt), override
-            )
-            report["status"] = "DIAGNOSTIC_ONLY_DEPTH_PASS"
-        except Exception as exc:
-            report["execution_preflight"] = {
-                "status": "BLOCKED",
-                "failure": {"stage": getattr(exc, "stage", "execution_preflight"),
-                            "http_status": getattr(exc, "http_status", None),
-                            "exception_type": type(exc).__name__, "message": str(exc)[:1600]},
-                "portfolio_state_changed": False,
-            }
-            report["status"] = "DIAGNOSTIC_ONLY_DEPTH_BLOCKED"
-    elif report.get("gates", {}).get("ranking") == "PASS":
-        try:
-            paper = run_snapshot(report, db_path, depth_fetch=fetch_depth,
-                funding_fetch=fetch_funding_events, funding_mark_fetch=fetch_funding_mark,
-                candle_fetch=fetch_1m_candles,
-                initial_nav=D(args.initial_nav_usdt), fee_override=override)
-            report["paper"] = paper
-            report["status"] = "PAPER_UPDATED" if paper.get("updated") else paper.get("status", "PAPER_SKIPPED")
-            report["portfolio"] = trade_report(db_path)
-        except Exception as exc:
-            report["status"] = "PAPER_BLOCKED"
-            report["failure"] = {"stage": getattr(exc, "stage", "paper_accounting"),
-                                 "http_status": getattr(exc, "http_status", None),
-                                 "exception_type": type(exc).__name__, "message": str(exc)[:1600],
-                                 "portfolio_state_changed": False}
+    ranking_pass = report.get("gates", {}).get("ranking") == "PASS"
+
+    if args.diagnostic_only:
+        if ranking_pass:
+            try:
+                report["execution_preflight"] = read_only_execution_preflight(
+                    report, D(args.initial_nav_usdt), override
+                )
+                report["status"] = "DIAGNOSTIC_ONLY_DEPTH_PASS"
+            except Exception as exc:
+                report["execution_preflight"] = {
+                    "status": "BLOCKED",
+                    "failure": {"stage": getattr(exc, "stage", "execution_preflight"),
+                                "http_status": getattr(exc, "http_status", None),
+                                "exception_type": type(exc).__name__, "message": str(exc)[:1600]},
+                    "portfolio_state_changed": False,
+                }
+                report["status"] = "DIAGNOSTIC_ONLY_DEPTH_BLOCKED"
+        else:
+            report["status"] = "RANKING_BLOCKED"
     else:
-        report["status"] = "RANKING_BLOCKED"
+        # Open positions are monitored regardless of whether ranking is available.
+        open_trades = report.get("portfolio", {}).get("open_trades", [])
+        if open_trades:
+            try:
+                server_ms = report.get("as_of_server_time_ms") or report.get("api", {}).get("server_time_ms")
+                if not isinstance(server_ms, int) or server_ms <= 0:
+                    server_ms = fetch_server_time_ms()
+                report.setdefault("api", {})["server_time_ms"] = server_ms
+                report["as_of_server_time_ms"] = server_ms
+                monitored = monitor_open_positions(
+                    db_path,
+                    now_ms=server_ms,
+                    initial_nav=D(args.initial_nav_usdt),
+                    ticker_fetch=fetch_monitor_tickers,
+                    funding_fetch=fetch_funding_events,
+                    funding_mark_fetch=fetch_funding_mark,
+                    candle_fetch=fetch_1m_candles,
+                )
+                report["monitoring"] = monitored
+            except Exception as exc:
+                report["monitoring"] = {
+                    "status": "MONITORING_BLOCKED",
+                    "analytics_updated": False,
+                    "portfolio_state_changed": False,
+                    "last_error": f"{type(exc).__name__}: {str(exc)[:1200]}",
+                }
+
+            report["portfolio"] = trade_report(db_path)
+            gate = rebalance_gate(db_path, run_started_ms)
+            exchange_ms = report.get("as_of_server_time_ms") or report.get("api", {}).get("server_time_ms")
+            gate["exchange_time_ms"] = exchange_ms
+            if gate.get("can_rebalance") and gate.get("eligible_after_ms") is not None:
+                if not isinstance(exchange_ms, int) or exchange_ms < int(gate["eligible_after_ms"]):
+                    gate["can_rebalance"] = False
+                    gate["reason"] = "EXCHANGE_CLOCK_BEFORE_ELIGIBILITY"
+            report["rebalance_gate"] = gate
+
+            if gate.get("can_rebalance") and ranking_pass:
+                try:
+                    paper = run_snapshot(
+                        report, db_path, depth_fetch=fetch_depth,
+                        funding_fetch=fetch_funding_events,
+                        funding_mark_fetch=fetch_funding_mark,
+                        candle_fetch=fetch_1m_candles,
+                        initial_nav=D(args.initial_nav_usdt),
+                        fee_override=override,
+                        run_started_ms=run_started_ms,
+                    )
+                    report["paper"] = paper
+                    report["status"] = "PAPER_UPDATED" if paper.get("updated") else paper.get("status", "PAPER_SKIPPED")
+                    report["portfolio"] = trade_report(db_path)
+                except Exception as exc:
+                    report["status"] = "REBALANCE_BLOCKED"
+                    report["failure"] = {
+                        "stage": getattr(exc, "stage", "paper_accounting"),
+                        "http_status": getattr(exc, "http_status", None),
+                        "exception_type": type(exc).__name__,
+                        "message": str(exc)[:1600],
+                        "portfolio_state_changed": False,
+                    }
+                    report["portfolio"] = trade_report(db_path)
+            elif not gate.get("can_rebalance"):
+                report["status"] = "MONITORING_ONLY" if report["monitoring"].get("analytics_updated") else "MONITORING_WARNING"
+                if not ranking_pass:
+                    report["ranking_warning"] = report.get("failure")
+            else:
+                report["status"] = "REBALANCE_DUE_RANKING_BLOCKED"
+                report["ranking_warning"] = report.get("failure")
+        elif ranking_pass:
+            # First scheduled paper run bootstraps the portfolio and starts its lock.
+            try:
+                paper = run_snapshot(
+                    report, db_path, depth_fetch=fetch_depth,
+                    funding_fetch=fetch_funding_events,
+                    funding_mark_fetch=fetch_funding_mark,
+                    candle_fetch=fetch_1m_candles,
+                    initial_nav=D(args.initial_nav_usdt),
+                    fee_override=override,
+                    run_started_ms=run_started_ms,
+                )
+                report["paper"] = paper
+                report["status"] = "PAPER_UPDATED" if paper.get("updated") else paper.get("status", "PAPER_SKIPPED")
+                report["portfolio"] = trade_report(db_path)
+            except Exception as exc:
+                report["status"] = "PAPER_BLOCKED"
+                report["failure"] = {
+                    "stage": getattr(exc, "stage", "paper_accounting"),
+                    "http_status": getattr(exc, "http_status", None),
+                    "exception_type": type(exc).__name__,
+                    "message": str(exc)[:1600],
+                    "portfolio_state_changed": False,
+                }
+        else:
+            report["status"] = "RANKING_BLOCKED"
+
+    report["run_started_at_utc"] = datetime.fromtimestamp(
+        run_started_ms / 1000, timezone.utc
+    ).isoformat().replace("+00:00", "Z")
+    report["run_started_ms"] = run_started_ms
     report["run_at_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     write_outputs(report, db_path, out)
-    print(json.dumps({"status":report.get("status"),"gates":report.get("gates"),
-        "leaders":report.get("leaders"),"paper":report.get("paper"),
-        "portfolio_roi_pct":report.get("portfolio",{}).get("portfolio_total_roi_pct"),
-        "strategy_mdd_pct":(report.get("portfolio",{}).get("risk",{}).get("strategy") or {}).get("max_drawdown_pct"),
-        "risk_quality":report.get("portfolio",{}).get("risk",{}).get("quality_status"),
-        "failure":report.get("failure"),"orders":"NONE"},indent=2,sort_keys=True,default=str))
-    if report["status"] in {"PAPER_BLOCKED","RANKING_BLOCKED","DIAGNOSTIC_ONLY_DEPTH_BLOCKED"}:
+    print(json.dumps({
+        "status": report.get("status"), "gates": report.get("gates"),
+        "leaders": report.get("leaders"), "monitoring": report.get("monitoring"),
+        "rebalance_gate": report.get("rebalance_gate"), "paper": report.get("paper"),
+        "portfolio_roi_pct": report.get("portfolio", {}).get("portfolio_total_roi_pct"),
+        "strategy_mdd_pct": (report.get("portfolio", {}).get("risk", {}).get("strategy") or {}).get("max_drawdown_pct"),
+        "risk_quality": report.get("portfolio", {}).get("risk", {}).get("quality_status"),
+        "failure": report.get("failure"), "orders": "NONE",
+    }, indent=2, sort_keys=True, default=str))
+    if report["status"] in {
+        "PAPER_BLOCKED", "RANKING_BLOCKED", "DIAGNOSTIC_ONLY_DEPTH_BLOCKED",
+    }:
         return 1
     return 0
 

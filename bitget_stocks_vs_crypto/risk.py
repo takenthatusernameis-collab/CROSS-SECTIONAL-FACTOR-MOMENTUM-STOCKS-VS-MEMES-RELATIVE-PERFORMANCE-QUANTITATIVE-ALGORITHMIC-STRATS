@@ -97,6 +97,8 @@ def analyse_intraday_risk(
     prior_mdd_trough_nav: Decimal | None,
     prior_mdd_peak_time_ms: int | None,
     prior_mdd_trough_time_ms: int | None,
+    prior_daily_peak_nav: Decimal | None = None,
+    prior_daily_mdd_pct: Decimal = D("0"),
 ) -> dict[str, Any]:
     """Reconstruct synchronized spread and NAV envelopes for the held pair.
 
@@ -170,8 +172,12 @@ def analyse_intraday_risk(
     spread_high = open_ratio
     spread_low = open_ratio
     spread_close = open_ratio
-    daily_peak = nav0
-    daily_mdd = D("0")
+    daily_peak = max(nav0, D(str(prior_daily_peak_nav))) if prior_daily_peak_nav is not None else nav0
+    if not daily_peak.is_finite() or daily_peak <= 0:
+        raise RiskDataError("Prior daily NAV peak must be finite and positive")
+    daily_mdd = D(str(prior_daily_mdd_pct))
+    if not daily_mdd.is_finite() or daily_mdd > 0:
+        raise RiskDataError("Prior daily MDD must be a finite non-positive percentage")
     nav_low_seen: Decimal | None = None
     nav_low_time: int | None = None
 

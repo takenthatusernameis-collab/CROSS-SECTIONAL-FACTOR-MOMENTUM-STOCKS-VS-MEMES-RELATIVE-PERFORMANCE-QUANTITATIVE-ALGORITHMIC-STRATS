@@ -104,7 +104,7 @@ class PaperLedgerTests(unittest.TestCase):
 
     def test_second_snapshot_closes_trades_and_tracks_fee_funding_adjusted_roi(self):
         day1 = 1_800_000_000_000
-        day2 = day1 + 86_400_000
+        day2 = day1 + 86_460_000
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "paper.sqlite3"
             first_books = books(day1)
@@ -135,7 +135,7 @@ class PaperLedgerTests(unittest.TestCase):
 
     def test_second_snapshot_persists_minute_spread_and_strategy_mdd(self):
         day1 = 1_800_000_000_000
-        day2 = day1 + 86_400_000
+        day2 = day1 + 86_460_000
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "paper.sqlite3"
             first_books = books(day1)
@@ -147,7 +147,7 @@ class PaperLedgerTests(unittest.TestCase):
 
             def candle_fetch(symbol, start_ms, end_ms, candle_type):
                 rows = []
-                for minute in range(1440):
+                for minute in range(1441):
                     ts = start_ms + minute * 60_000
                     if symbol == "STOCKUSDT":
                         if candle_type == "mark" and minute == 600:
@@ -178,8 +178,8 @@ class PaperLedgerTests(unittest.TestCase):
             view = trade_report(db_path)
             risk = view["risk"]
             self.assertEqual(risk["latest_interval"]["status"], "COMPLETE")
-            self.assertEqual(risk["latest_interval"]["expected_minutes"], 1440)
-            self.assertEqual(risk["latest_interval"]["matched_minutes"], 1440)
+            self.assertEqual(risk["latest_interval"]["expected_minutes"], 1441)
+            self.assertEqual(risk["latest_interval"]["matched_minutes"], 1441)
             self.assertLess(D(risk["latest_interval"]["spread_drawdown_pct"]), D("0"))
             self.assertLess(D(risk["strategy"]["max_drawdown_pct"]), D("0"))
             self.assertEqual(risk["strategy"]["complete_intervals"], 1)
@@ -187,7 +187,7 @@ class PaperLedgerTests(unittest.TestCase):
 
     def test_insufficient_depth_does_not_mutate_existing_state(self):
         day1 = 1_800_000_000_000
-        day2 = day1 + 86_400_000
+        day2 = day1 + 86_460_000
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "paper.sqlite3"
             b1 = books(day1)

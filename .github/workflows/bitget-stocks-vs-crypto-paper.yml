@@ -1,12 +1,12 @@
-name: Bitget Stocks vs Crypto — Daily Paper Portfolio
+name: Bitget Stocks vs Crypto — Five-Minute Monitor and Cooldown-Gated Paper Portfolio
 
 on:
   schedule:
-    - cron: "5 0 * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       mode:
-        description: "Diagnostic only, or explicitly run one paper rebalance now"
+        description: "Diagnostic only, or run the same monitored/cooldown-gated paper cycle now"
         required: true
         type: choice
         default: diagnostic
@@ -23,6 +23,8 @@ on:
       - "README.md"
       - "PROMPT.md"
 
+# Only one job may read-modify-push the SQLite state branch at a time.
+# Do not cancel a running accounting/monitor cycle.
 concurrency:
   group: bitget-stocks-vs-crypto-paper
   cancel-in-progress: false
@@ -32,9 +34,9 @@ permissions:
 
 jobs:
   bitget-paper:
-    name: Daily Bitget Stocks-vs-Crypto paper session
+    name: Five-minute Bitget monitor; rebalance only when 24h lock expires
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       TZ: UTC
       PYTHONUNBUFFERED: "1"
@@ -42,7 +44,7 @@ jobs:
       BITGET_TAKER_FEE_RATE: ${{ vars.BITGET_TAKER_FEE_RATE }}
       PAPER_DB: state/bitget_paper.sqlite3
       PAPER_OUTPUT: artifacts/bitget-paper-trading
-      MODE: ${{ inputs.mode || 'diagnostic' }}
+      MODE: ${{ inputs.mode || 'scheduled' }}
     steps:
       - name: Check out main
         uses: actions/checkout@v4
@@ -55,7 +57,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate unit tests
+      - name: Validate Bitget tests
         run: python -m unittest discover -s tests -p 'test_bitget_*.py' -v
 
       - name: Compile source and tests
@@ -80,18 +82,19 @@ jobs:
               check=con.execute("PRAGMA integrity_check").fetchone()[0]
               if check != "ok": raise SystemExit(f"SQLite integrity failure: {check}")
               tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-              required={"account","trades","positions","ledger","daily_snapshots"}
+              required={"account","trades","positions","ledger","daily_snapshots",
+                        "strategy_risk","risk_intervals","minute_metrics"}
               missing=required-tables
               if missing: raise SystemExit(f"SQLite state missing tables: {sorted(missing)}")
-              print("Restored Bitget paper database and validated integrity.")
+              print("Restored and integrity-checked the durable Bitget paper/monitor state.")
           finally:
               con.close()
           PY
           else
-            echo "No durable Bitget state branch yet; this is the initial paper-account bootstrap."
+            echo "No durable Bitget state branch yet; the first successful scheduled paper run bootstraps the account."
           fi
 
-      - name: Run one scheduled paper rebalance (or selected manual paper run)
+      - name: Run five-minute monitor and cooldown-gated rebalance
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')
         run: python scripts/run_bitget_paper.py --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
 
@@ -102,23 +105,24 @@ jobs:
       - name: Check SQLite integrity before persistence
         if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) && success()
         run: |
-          if [ -f "$PAPER_DB" ]; then
-            python - <<'PY'
+          python - <<'PY'
           import sqlite3
           con=sqlite3.connect("state/bitget_paper.sqlite3")
           try:
               result=con.execute("PRAGMA integrity_check").fetchone()[0]
               if result != "ok": raise SystemExit(result)
-              print("Paper database integrity: OK")
+              required={"account","positions","trades","ledger","daily_snapshots",
+                        "strategy_risk","risk_intervals","minute_metrics",
+                        "monitor_state","monitor_minute_metrics","monitor_observations"}
+              tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+              missing=required-tables
+              if missing: raise SystemExit(f"missing tables: {sorted(missing)}")
+              print("SQLite integrity and monitoring schema: OK")
           finally:
               con.close()
           PY
-          else
-            echo "Paper runner did not create a database." >&2
-            exit 1
-          fi
 
-      - name: Persist SQLite ledger to dedicated state branch
+      - name: Persist SQLite portfolio and monitoring state
         if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) && success()
         shell: bash
         run: |
@@ -139,11 +143,11 @@ jobs:
           cp "$DB_COPY" state/bitget_paper.sqlite3
           git add state/bitget_paper.sqlite3
           if ! git diff --cached --quiet; then
-            git commit -m "Update Bitget Stocks-vs-Crypto paper ledger"
+            git commit -m "Persist five-minute Bitget paper monitor state"
           fi
           git push origin "HEAD:refs/heads/${STATE_BRANCH}"
 
-      - name: Upload reports and a restorable database backup
+      - name: Upload latest reports and restorable database backup
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -152,4 +156,6 @@ jobs:
             artifacts/bitget-paper-trading/
             state/bitget_paper.sqlite3
           if-no-files-found: warn
-          retention-days: 90
+          # The long-lived source of truth is the state branch; keep high-frequency
+          # per-run artifacts short-lived to avoid hundreds of retained copies.
+          retention-days: 1

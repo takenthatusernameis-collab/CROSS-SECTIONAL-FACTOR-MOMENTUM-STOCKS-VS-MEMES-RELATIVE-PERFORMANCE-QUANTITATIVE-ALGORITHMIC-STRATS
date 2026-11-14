@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from pathlib import Path
 from typing import Any, Callable
 
-from .risk import analyse_intraday_risk
+from .risk import analyse_intraday_risk, expected_minute_starts
 
 D = Decimal
 
@@ -34,6 +34,42 @@ def dec(value: Any, name: str, *, positive: bool = False) -> Decimal:
 
 def fmt(value: Decimal) -> str:
     return format(value, "f")
+
+
+HOLD_DURATION_MS = 24 * 60 * 60 * 1000
+MINUTE_MS = 60 * 1000
+
+
+def cooldown_close_ms(entry_time_ms: int) -> int:
+    """Close after the first full 1m candle whose start is not before entry+24h."""
+    expiry = int(entry_time_ms) + HOLD_DURATION_MS
+    first_full_minute_start = ((expiry + MINUTE_MS - 1) // MINUTE_MS) * MINUTE_MS
+    return first_full_minute_start + MINUTE_MS
+
+
+def rebalance_gate(db_path: str | Path, run_started_ms: int) -> dict[str, Any]:
+    """Return a persistent 24h position-lock decision based on actual entry times."""
+    path = Path(db_path)
+    if not path.exists():
+        return {"can_rebalance": True, "reason": "NO_PAPER_DATABASE", "eligible_after_ms": None}
+    db = sqlite3.connect(str(path))
+    try:
+        rows = db.execute("""SELECT p.leg,p.trade_id,t.entry_time_ms FROM positions p
+            JOIN trades t ON t.trade_id=p.trade_id ORDER BY p.leg""").fetchall()
+        if not rows:
+            return {"can_rebalance": True, "reason": "NO_OPEN_POSITIONS", "eligible_after_ms": None}
+        if {row[0] for row in rows} != {"LONG", "SHORT"} or len(rows) != 2:
+            return {"can_rebalance": False, "reason": "INCOMPLETE_POSITION_PAIR", "eligible_after_ms": None}
+        latest_entry = max(int(row[2]) for row in rows)
+        eligible_after = cooldown_close_ms(latest_entry)
+        started = int(run_started_ms)
+        return {"can_rebalance": started >= eligible_after,
+                "reason": "COOLDOWN_COMPLETE" if started >= eligible_after else "24H_COOLDOWN_ACTIVE",
+                "latest_entry_time_ms": latest_entry, "eligible_after_ms": eligible_after,
+                "run_started_ms": started,
+                "seconds_remaining": max(0, (eligible_after-started)/1000)}
+    finally:
+        db.close()
 
 
 def utc_date(timestamp_ms: int) -> str:
@@ -121,6 +157,43 @@ def init_db(path: str | Path, initial_nav: Decimal) -> sqlite3.Connection:
         PRIMARY KEY(snapshot_date,timestamp_ms),
         FOREIGN KEY(snapshot_date) REFERENCES risk_intervals(snapshot_date));
       CREATE INDEX IF NOT EXISTS minute_metrics_time_idx ON minute_metrics(snapshot_date,timestamp_ms);
+      CREATE TABLE IF NOT EXISTS monitor_state(
+        id INTEGER PRIMARY KEY CHECK(id=1), cycle_start_ms INTEGER NOT NULL,
+        eligible_after_ms INTEGER NOT NULL, long_trade_id INTEGER NOT NULL,
+        short_trade_id INTEGER NOT NULL, last_processed_minute_ms INTEGER,
+        last_observed_at_ms INTEGER, nav_start TEXT NOT NULL, nav_last TEXT NOT NULL,
+        funding_accrued TEXT NOT NULL DEFAULT '0', spread_open_ratio TEXT NOT NULL,
+        spread_high_ratio TEXT NOT NULL, spread_low_ratio TEXT NOT NULL,
+        spread_close_ratio TEXT, nav_low_intraday TEXT, nav_low_time_ms INTEGER,
+        daily_peak_nav TEXT NOT NULL, daily_mdd_pct TEXT NOT NULL DEFAULT '0',
+        expected_minutes INTEGER NOT NULL DEFAULT 0, matched_minutes INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'WAITING', last_error TEXT);
+      CREATE TABLE IF NOT EXISTS monitor_minute_metrics(
+        cycle_start_ms INTEGER NOT NULL, timestamp_ms INTEGER NOT NULL,
+        long_trade_id INTEGER NOT NULL, short_trade_id INTEGER NOT NULL,
+        long_symbol TEXT NOT NULL, short_symbol TEXT NOT NULL,
+        spread_ratio_close TEXT NOT NULL, spread_ratio_high TEXT NOT NULL,
+        spread_ratio_low TEXT NOT NULL, nav_close TEXT NOT NULL,
+        nav_high TEXT NOT NULL, nav_low TEXT NOT NULL,
+        PRIMARY KEY(cycle_start_ms,timestamp_ms));
+      CREATE INDEX IF NOT EXISTS monitor_minute_time_idx ON monitor_minute_metrics(timestamp_ms);
+      CREATE TABLE IF NOT EXISTS monitor_observations(
+        observed_at_ms INTEGER PRIMARY KEY, cycle_start_ms INTEGER NOT NULL,
+        eligible_after_ms INTEGER NOT NULL, status TEXT NOT NULL,
+        nav_usdt TEXT NOT NULL, cash_usdt TEXT NOT NULL,
+        unrealized_pnl_usdt TEXT NOT NULL, funding_pending_usdt TEXT NOT NULL,
+        gross_exposure_usdt TEXT NOT NULL, portfolio_roi_pct TEXT NOT NULL,
+        long_symbol TEXT NOT NULL, long_mark_price TEXT NOT NULL,
+        long_unrealized_pnl_usdt TEXT NOT NULL, long_trade_roi_pct TEXT NOT NULL,
+        short_symbol TEXT NOT NULL, short_mark_price TEXT NOT NULL,
+        short_unrealized_pnl_usdt TEXT NOT NULL, short_trade_roi_pct TEXT NOT NULL,
+        spread_ratio_mark TEXT NOT NULL, spread_open_ratio TEXT NOT NULL,
+        spread_high_ratio TEXT NOT NULL, spread_low_ratio TEXT NOT NULL,
+        spread_drawdown_pct TEXT NOT NULL, daily_mdd_pct TEXT NOT NULL,
+        strategy_mdd_pct TEXT NOT NULL, expected_minutes INTEGER NOT NULL,
+        matched_minutes INTEGER NOT NULL, coverage_pct TEXT NOT NULL,
+        seconds_to_rebalance INTEGER NOT NULL, last_error TEXT);
+      CREATE INDEX IF NOT EXISTS monitor_observations_cycle_idx ON monitor_observations(cycle_start_ms,observed_at_ms);
     """)
     account = db.execute("SELECT * FROM account WHERE id=1").fetchone()
     if account is None:
@@ -245,7 +318,8 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                  funding_mark_fetch: Callable[[str, int], Decimal],
                  candle_fetch: Callable[[str, int, int, str], list[dict[str, Any]]] | None = None,
                  initial_nav: Decimal = D("10000"),
-                 fee_override: Decimal | None = None) -> dict[str, Any]:
+                 fee_override: Decimal | None = None,
+                 run_started_ms: int | None = None) -> dict[str, Any]:
     if report.get("gates", {}).get("ranking") != "PASS":
         raise PaperError("Ranking gate is not PASS; paper state was not changed")
     as_of = report.get("as_of_server_time_ms")
@@ -272,6 +346,25 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                     "message": "A paper snapshot already exists for this UTC date; no duplicate trades were created."}
 
         old_positions = {r["leg"]: dict(r) for r in db.execute("SELECT * FROM positions")}
+        if old_positions:
+            if set(old_positions) != {"LONG", "SHORT"}:
+                raise PaperError("Existing paper state does not contain exactly one LONG and one SHORT position")
+            entry_rows = db.execute("""SELECT t.entry_time_ms FROM positions p
+                JOIN trades t ON t.trade_id=p.trade_id""").fetchall()
+            eligible_after = cooldown_close_ms(max(int(r[0]) for r in entry_rows))
+            started_ms = int(run_started_ms) if run_started_ms is not None else as_of
+            if started_ms < eligible_after or as_of < eligible_after:
+                return {"status":"COOLDOWN_ACTIVE","updated":False,
+                        "eligible_after_ms":eligible_after,"run_started_ms":started_ms,
+                        "seconds_remaining":max(0,(eligible_after-started_ms)/1000),
+                        "message":"The 24-hour position lock remains active until the first complete one-minute candle after expiry has closed."}
+        monitor_state_row = db.execute("SELECT * FROM monitor_state WHERE id=1").fetchone()
+        monitor_cycle_valid = bool(
+            monitor_state_row is not None and set(old_positions) == {"LONG", "SHORT"}
+            and int(monitor_state_row["long_trade_id"]) == int(old_positions["LONG"]["trade_id"])
+            and int(monitor_state_row["short_trade_id"]) == int(old_positions["SHORT"]["trade_id"])
+            and monitor_state_row["last_processed_minute_ms"] is not None
+        )
         prior_snapshot_for_risk = db.execute(
             "SELECT snapshot_date,as_of_ms,nav FROM daily_snapshots ORDER BY snapshot_date DESC LIMIT 1"
         ).fetchone()
@@ -315,7 +408,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
 
         # Risk reconstruction is non-blocking: a candle-data outage must not change
         # ranking or prevent otherwise valid paper accounting.
-        if old_positions and set(old_positions) == {"LONG", "SHORT"} and risk_period_start_ms is not None:
+        if old_positions and set(old_positions) == {"LONG", "SHORT"} and risk_period_start_ms is not None and not monitor_cycle_valid:
             if candle_fetch is None:
                 risk_fetch_error = "No one-minute candle fetcher was supplied"
             else:
@@ -327,7 +420,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                     risk_fetch_error = f"{type(exc).__name__}: {str(exc)[:800]}"
                     risk_market_candles.clear()
                     risk_mark_candles.clear()
-        elif old_positions and risk_period_start_ms is None:
+        elif old_positions and risk_period_start_ms is None and not monitor_cycle_valid:
             risk_fetch_error = "Existing positions have no preceding daily snapshot"
         elif old_positions and set(old_positions) != {"LONG", "SHORT"}:
             risk_fetch_error = "Prior portfolio does not contain exactly one LONG and one SHORT position"
@@ -380,7 +473,50 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
         risk_analysis: dict[str, Any] | None = None
         risk_status = "NO_PRIOR_POSITIONS"
         risk_error = risk_fetch_error
-        if old_positions and set(old_positions) == {"LONG", "SHORT"} and previous is not None and not risk_fetch_error:
+        if monitor_cycle_valid:
+            monitor_state_tx = db.execute("SELECT * FROM monitor_state WHERE id=1").fetchone()
+            monitor_start = int(monitor_state_tx["cycle_start_ms"])
+            try:
+                # Recompute the full interval expected count at finalization so a
+                # failed last five-minute job cannot make stale coverage look complete.
+                monitor_expected = len(expected_minute_starts(monitor_start, as_of))
+            except Exception as exc:
+                monitor_expected = int(monitor_state_tx["expected_minutes"]) + 1
+                risk_error = f"Final interval exceeds minute-risk limit: {type(exc).__name__}: {str(exc)[:300]}"
+            monitor_matched = int(db.execute(
+                "SELECT COUNT(*) FROM monitor_minute_metrics WHERE cycle_start_ms=?",
+                (monitor_start,),
+            ).fetchone()[0])
+            monitor_coverage = (D(monitor_matched)/D(monitor_expected)*D("100")) if monitor_expected else D("0")
+            monitor_status = str(monitor_state_tx["status"])
+            risk_status = "COMPLETE" if monitor_status == "MONITORING" and monitor_expected > 0 and monitor_matched == monitor_expected else "INCOMPLETE"
+            risk_error = risk_error or monitor_state_tx["last_error"]
+            if risk_status != "COMPLETE" and not risk_error:
+                risk_error = "One or more expected one-minute intervals were not durably observed before rebalance."
+            strategy_minutes = db.execute("""SELECT timestamp_ms,spread_ratio_close,spread_ratio_high,
+                spread_ratio_low,nav_close,nav_high,nav_low FROM monitor_minute_metrics
+                WHERE cycle_start_ms=? ORDER BY timestamp_ms""",
+                (int(monitor_state_tx["cycle_start_ms"]),)).fetchall()
+            risk_analysis = {
+                "status":risk_status,"period_start_ms":monitor_start,
+                "period_end_ms":as_of,"expected_minutes":monitor_expected,"matched_minutes":monitor_matched,
+                "coverage_pct":fmt(monitor_coverage),"spread_open_ratio":monitor_state_tx["spread_open_ratio"],
+                "spread_high_ratio":monitor_state_tx["spread_high_ratio"],
+                "spread_low_ratio":monitor_state_tx["spread_low_ratio"],
+                "spread_close_ratio":monitor_state_tx["spread_close_ratio"],
+                "spread_drawdown_pct":fmt((dec(monitor_state_tx["spread_low_ratio"],"spread low",positive=True)/dec(monitor_state_tx["spread_high_ratio"],"spread high",positive=True)-D("1"))*D("100")),
+                "nav_start":monitor_state_tx["nav_start"],"nav_low":monitor_state_tx["nav_low_intraday"],
+                "nav_low_time_ms":monitor_state_tx["nav_low_time_ms"],"nav_close":monitor_state_tx["nav_last"],
+                "daily_peak_nav":monitor_state_tx["daily_peak_nav"],"daily_mdd_pct":monitor_state_tx["daily_mdd_pct"],
+                "strategy_peak_nav":risk_state_row["peak_nav"],"strategy_peak_time_ms":risk_state_row["peak_time_ms"],
+                "strategy_mdd_pct":risk_state_row["max_drawdown_pct"],
+                "strategy_mdd_peak_nav":risk_state_row["mdd_peak_nav"],
+                "strategy_mdd_trough_nav":risk_state_row["mdd_trough_nav"],
+                "strategy_mdd_peak_time_ms":risk_state_row["mdd_peak_time_ms"],
+                "strategy_mdd_trough_time_ms":risk_state_row["mdd_trough_time_ms"],
+                "minute_rows":[dict(r) for r in strategy_minutes],
+            }
+        elif old_positions and set(old_positions) == {"LONG", "SHORT"} and previous is not None and not risk_fetch_error:
             try:
                 risk_analysis = analyse_intraday_risk(
                     start_ms=int(previous["as_of_ms"]), end_ms=as_of,
@@ -592,6 +728,21 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
            fmt(long_fee),fmt(short_fee),report.get("run_at_utc",utc_iso(as_of)),closed_count))
         db.execute("UPDATE account SET cash=?,realized_gross_pnl=?,fees_cumulative=?,funding_cumulative=? WHERE id=1",
                    (fmt(cash),fmt(realized),fmt(fees),fmt(funding_total)))
+
+        # Start a new persistent 24h holding cycle. Monitoring is analytics-only
+        # until the first complete 1m candle after this timestamp's 24h expiry.
+        new_cycle_spread = new_positions["LONG"]["entry_price"] / new_positions["SHORT"]["entry_price"]
+        db.execute("""INSERT OR REPLACE INTO monitor_state(
+            id,cycle_start_ms,eligible_after_ms,long_trade_id,short_trade_id,
+            last_processed_minute_ms,last_observed_at_ms,nav_start,nav_last,funding_accrued,
+            spread_open_ratio,spread_high_ratio,spread_low_ratio,spread_close_ratio,
+            nav_low_intraday,nav_low_time_ms,daily_peak_nav,daily_mdd_pct,
+            expected_minutes,matched_minutes,status,last_error)
+            VALUES(1,?,?,?,?,NULL,?,?,?,?,?,?,?,?,NULL,NULL,?,'0',0,0,'WAITING',NULL)""",
+            (as_of,cooldown_close_ms(as_of),new_positions["LONG"]["trade_id"],
+             new_positions["SHORT"]["trade_id"],as_of,fmt(nav),fmt(nav),"0",
+             fmt(new_cycle_spread),fmt(new_cycle_spread),fmt(new_cycle_spread),
+             fmt(new_cycle_spread),fmt(nav)))
         db.execute("COMMIT")
 
         closed_trades = [dict(r) for r in db.execute(
@@ -651,13 +802,23 @@ def trade_report(db_path: str | Path) -> dict[str, Any]:
             recent_intervals = []
         risk_dict = dict(risk_state) if risk_state else None
         interval_dict = dict(latest_interval) if latest_interval else None
-        risk_quality = ("NO_MINUTE_HISTORY" if not risk_dict or
-                        (risk_dict["complete_intervals"] == 0 and risk_dict["incomplete_intervals"] == 0)
-                        else ("COMPLETE" if risk_dict["incomplete_intervals"] == 0 else "PARTIAL_DATA"))
+        latest_monitor_row = db.execute("SELECT * FROM monitor_observations ORDER BY observed_at_ms DESC LIMIT 1").fetchone() if "monitor_observations" in tables else None
+        monitor_state = db.execute("SELECT * FROM monitor_state WHERE id=1").fetchone() if "monitor_state" in tables else None
+        if monitor_state and int(monitor_state["expected_minutes"]) > 0:
+            risk_quality = ("COMPLETE_CURRENT_CYCLE"
+                            if monitor_state["status"] == "MONITORING"
+                            and int(monitor_state["matched_minutes"]) == int(monitor_state["expected_minutes"])
+                            else "PARTIAL_CURRENT_CYCLE")
+        else:
+            risk_quality = ("NO_MINUTE_HISTORY" if not risk_dict or
+                            (risk_dict["complete_intervals"] == 0 and risk_dict["incomplete_intervals"] == 0)
+                            else ("COMPLETE" if risk_dict["incomplete_intervals"] == 0 else "PARTIAL_DATA"))
         return {"status":"OK","initial_nav_usdt":account["initial_nav"] if account else None,
             "latest_snapshot":snap_dict,"open_trades":[dict(x) for x in open_rows],
             "closed_trades":[dict(x) for x in closed],
             "portfolio_total_roi_pct":snap_dict.get("total_return_pct") if snap_dict else None,
+            "latest_monitor":dict(latest_monitor_row) if latest_monitor_row else None,
+            "rebalance_lock":dict(monitor_state) if monitor_state else None,
             "risk":{"quality_status":risk_quality,"strategy":risk_dict,
                     "latest_interval":interval_dict,"recent_intervals":[dict(x) for x in recent_intervals]}}
     finally:

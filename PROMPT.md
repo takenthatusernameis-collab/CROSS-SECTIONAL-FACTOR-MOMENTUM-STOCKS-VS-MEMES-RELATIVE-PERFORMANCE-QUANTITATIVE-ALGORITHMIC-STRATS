@@ -6,7 +6,7 @@ Maintain a public-data-only, credential-free, paper-only cross-sectional pair on
 
 ## Universe
 
-Refresh `GET /api/v3/market/instruments?category=USDT-FUTURES` each daily run. Eligible instruments must satisfy all of:
+Refresh `GET /api/v3/market/instruments?category=USDT-FUTURES` on each five-minute scheduled run. Eligible instruments must satisfy all of:
 - `category == USDT-FUTURES`
 - `quoteCoin == USDT`
 - `status == online`
@@ -27,7 +27,12 @@ Do not infer class from ticker, `baseCoin`, contract name, project name, token d
 - Long exactly the eligible stock with the highest 24-hour percentage return.
 - Short exactly the eligible crypto contract with the lowest 24-hour percentage return.
 - One position per leg. Long notional target = 1× NAV; short notional target = 1× NAV; total gross exposure target = 2× NAV.
-- One portfolio transition per UTC date at 00:05 UTC. Repeated same-day runs must be idempotent.
+- Refresh the market ranking every five-minute workflow run. Ranking refreshes never independently authorize a portfolio transition.
+- Persist the opening timestamp for both simulated legs. The minimum holding lock is measured from the later leg-entry timestamp, not from UTC midnight or the cron schedule.
+- The 24-hour expiry is `latest_entry_time_ms + 86,400,000`. Rebalance eligibility is only after the first complete one-minute candle whose start is at or after that expiry has closed: `ceil(expiry_ms / 60,000) * 60,000 + 60,000`.
+- Capture `run_started_ms` before any ranking or network request. A rebalance is allowed only when that workflow run started at/after `eligible_after_ms` AND Bitget server time is also at/after it. A run that began before expiry must not rebalance even if its API work finishes after expiry.
+- Rebalance on the first eligible workflow run, without requiring a run to coincide with the exact expiry minute. If ranking, market-data, order-book depth, or accounting validation fails, preserve the existing pair and retry on a later five-minute run.
+- A successful rebalance starts a new persisted 24-hour lock from the new positions' actual entry timestamp. Keep the UTC-date idempotency check only as a secondary duplicate-run safeguard.
 - No runner-up, liquidity-ranked substitute, symbol-based exclusion, scaling, averaging, pyramiding or intraday reranking. If the selected pair cannot be safely paper-filled, skip the entire transition and preserve prior positions/state.
 
 ## Paper accounting
@@ -45,12 +50,15 @@ Do not infer class from ticker, `baseCoin`, contract name, project name, token d
 
 ## Minute spread and risk analytics (accounting only; do not change selection)
 
-- After a prior daily pair has been held, fetch the complete interval of one-minute Bitget contract candles from the public `GET /api/v3/market/candles` endpoint. Use `category=USDT-FUTURES`, `interval=1m`, and `type=market` for the synthetic spread, plus `type=mark` for NAV/MDD.
+- After a pair has been opened, every five-minute run monitors the existing holdings while the 24-hour lock is active. Fetch live Bitget tickers for current mark/last prices and incrementally fetch all newly closed one-minute candles from the public `GET /api/v3/market/candles` endpoint. Use `category=USDT-FUTURES`, `interval=1m`, and `type=market` for the synthetic spread, plus `type=mark` for NAV/MDD.
 - The synthetic spread ratio is `long market price / short market price`. Within each minute, spread high envelope = `long high / short low`; spread low envelope = `long low / short high`; interval spread DD = `(minimum spread low / maximum spread high - 1) × 100`.
 - Reconstruct minute paper NAV from the previous snapshot's cash, observed funding settlements, actual leg quantities and entry prices. For a conservative mark-price NAV envelope, NAV high uses long mark high and short mark low; NAV low uses long mark low and short mark high. Update the historical strategy peak and MDD only from complete paired minute intervals, plus the final daily rebalance NAV.
 - Synchronized OHLC bars do not prove exact intraminute price ordering or simultaneous cross-leg extrema. Label these values as conservative OHLC-envelope estimates, never tick-exact values.
 - Require every expected complete minute to exist for both symbols and both candle types before updating historical intraday MDD. Record expected/matched counts and coverage. Partial/missing data is explicitly marked and must not contaminate the historical minute MDD. Candle-data failure must not alter the ranking or independently block a valid daily paper rebalance.
-- Persist interval summaries and minute observations to SQLite. Export the daily risk history and latest interval minute series. Report spread open/high/low/close, spread DD, daily MDD, historical strategy MDD and coverage quality.
+- Persist interval summaries and minute observations to SQLite. During the cooldown, monitoring may update only the dedicated `monitor_state`, `monitor_minute_metrics`, and `monitor_observations` tables plus strategy peak/MDD risk state after a complete paired segment. It must not update account cash, open positions, trades, the transaction/funding ledger, or `daily_snapshots`.
+- Show current NAV/ROI estimates, each leg's direction, mark, unrealized P&L and estimated net leg ROI, pending funding estimate, spread mark/high/low/drawdown, daily MDD, historical strategy MDD, paired-minute coverage, and the countdown to eligibility.
+- Pending funding in monitoring is informational only: do not post it to account cash or trade/ledger records until the next successful rebalance atomically applies each observed settlement exactly once.
+- The monitor checkpoint advances only through a fully complete contiguous minute segment. If any expected paired market/mark candle is missing, do not update historical strategy MDD or advance past the gap; retry the missing segment on a later run. Never silently skip missing minutes.
 - The first portfolio snapshot has no prior held interval; record `NO_PRIOR_POSITIONS` rather than inventing a spread or minute MDD. Do not call TradingView or use its API.
 
 ## Persistence and operation
@@ -59,8 +67,11 @@ Do not infer class from ticker, `baseCoin`, contract name, project name, token d
 - Durable state branch: `bitget-paper-portfolio-state`.
 - Keep append-only transaction events and closed trade history. Persist daily NAV snapshots. Upload per-run JSON/Markdown plus closed-trade and NAV CSVs.
 - Initial NAV defaults to 10,000 USDT and is immutable after database initialization.
-- Manual diagnostic runs must never change paper positions. Manual paper dispatch is opt-in and guarded by the same per-UTC-date idempotency rule.
-- Scheduled workflow is a single UTC daily event; do not add a loop or intraday monitoring.
+- Manual diagnostic runs must never change paper positions or monitoring state. Manual paper dispatch is opt-in and obeys the same persisted entry-time cooldown, candle-close requirement and first-run-after-expiry guard as the scheduled workflow.
+- Scheduled workflow runs every five minutes (`*/5 * * * *`). Each scheduled run performs market ranking and, when an open pair exists, analytics-only monitoring. Portfolio transitions remain cooldown-gated as specified above.
+- GitHub Actions concurrency must serialize runs so two jobs cannot monitor or mutate the same SQLite file concurrently. Do not cancel a job while it is persisting state.
+- Every scheduled or manually dispatched paper run restores and persists the same SQLite state branch. Push-triggered and manual diagnostic runs remain read-only and must never update monitor or portfolio state.
+- Do not override the cooldown in manual paper mode, on retry, after a data gap, or after workflow delay.
 
 ## Safety boundary and limitations
 
