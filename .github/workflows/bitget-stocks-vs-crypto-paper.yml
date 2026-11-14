@@ -41,7 +41,7 @@ jobs:
     env:
       TZ: UTC
       PYTHONUNBUFFERED: "1"
-      PAPER_INITIAL_NAV_USDT: ${{ vars.PAPER_INITIAL_NAV_USDT || '10000' }}
+      PAPER_INITIAL_NAV_USDT: "10"
       BITGET_TAKER_FEE_RATE: ${{ vars.BITGET_TAKER_FEE_RATE }}
       PAPER_DB: state/bitget_paper.sqlite3
       PAPER_OUTPUT: artifacts/bitget-paper-trading
@@ -78,11 +78,18 @@ jobs:
           mkdir -p state
           STATE_BRANCH="bitget-paper-portfolio-state"
           if git fetch --no-tags origin "+refs/heads/${STATE_BRANCH}:refs/remotes/origin/${STATE_BRANCH}"; then
-            if ! git show "refs/remotes/origin/${STATE_BRANCH}:state/bitget_paper.sqlite3" > "$PAPER_DB"; then
-              echo "ERROR: State branch exists but its SQLite database is missing; refusing to reset paper history." >&2
+            if git show "refs/remotes/origin/${STATE_BRANCH}:state/bitget_paper.sqlite3" > "$PAPER_DB" 2>/dev/null; then
+              echo "Restored existing durable Bitget paper state."
+            elif git cat-file -e "refs/remotes/origin/${STATE_BRANCH}:RESET_PENDING.md" 2>/dev/null; then
+              rm -f "$PAPER_DB"
+              echo "Authorized clean reset detected; bootstrapping a new 10 USDT paper ledger."
+            else
+              rm -f "$PAPER_DB"
+              echo "ERROR: State database is missing and no authorized reset marker exists; refusing to recreate history." >&2
               exit 1
             fi
-            python - <<'PY'
+            if [[ -s "$PAPER_DB" ]]; then
+              python - <<'PY'
           import sqlite3
           con=sqlite3.connect("state/bitget_paper.sqlite3")
           try:
@@ -98,6 +105,7 @@ jobs:
           finally:
               con.close()
           PY
+            fi
           else
             echo "No durable Bitget state branch yet; the first successful scheduled paper run bootstraps the account."
           fi
@@ -121,7 +129,7 @@ jobs:
               if result != "ok": raise SystemExit(result)
               required={"account","positions","trades","ledger","daily_snapshots",
                         "strategy_risk","risk_intervals","minute_metrics",
-                        "monitor_state","monitor_minute_metrics","monitor_observations"}
+                        "monitor_state","monitor_minute_metrics","monitor_observations","equity_curve"}
               tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
               missing=required-tables
               if missing: raise SystemExit(f"missing tables: {sorted(missing)}")
@@ -142,17 +150,19 @@ jobs:
           trap 'if [[ -s "$DB_COPY" ]]; then mkdir -p "$(dirname "$PAPER_DB")"; cp "$DB_COPY" "$PAPER_DB"; fi' EXIT
 
           # Render a human-readable view from the exact SQLite copy being persisted.
-          STATUS_COPY="$RUNNER_TEMP/STATUS.md"
           python scripts/render_bitget_status.py \
             --db-path "$DB_COPY" \
-            --output "$STATUS_COPY" \
+            --output "$PAPER_OUTPUT/STATUS.md" \
             --workflow-start-ms "$PAPER_WORKFLOW_STARTED_MS" \
             --run-id "$GITHUB_RUN_ID" \
             --event-name "$GITHUB_EVENT_NAME" \
             --mode "$MODE" \
             --repository "$GITHUB_REPOSITORY" \
             --report-json "$PAPER_OUTPUT/bitget_paper_report.json"
-          test -s "$STATUS_COPY"
+          test -s "$PAPER_OUTPUT/STATUS.md"
+          for required in equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json; do
+            test -s "$PAPER_OUTPUT/$required"
+          done
 
           STATE_BRANCH="bitget-paper-portfolio-state"
           git config user.name "github-actions[bot]"
@@ -170,10 +180,15 @@ jobs:
           fi
           mkdir -p state
           cp "$DB_COPY" state/bitget_paper.sqlite3
-          cp "$STATUS_COPY" STATUS.md
-          git add state/bitget_paper.sqlite3 STATUS.md
+          cp "$PAPER_OUTPUT/STATUS.md" STATUS.md
+          for required in equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json; do
+            cp "$PAPER_OUTPUT/$required" "$required"
+          done
+          if [[ -f RESET_PENDING.md ]]; then rm RESET_PENDING.md; fi
+          git add state/bitget_paper.sqlite3 STATUS.md equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json
+          git add -u RESET_PENDING.md 2>/dev/null || true
           if ! git diff --cached --quiet; then
-            git commit -m "Persist paper portfolio database and readable status"
+            git commit -m "Persist lifetime paper performance and readable status"
           fi
           git push origin "HEAD:refs/heads/${STATE_BRANCH}"
 

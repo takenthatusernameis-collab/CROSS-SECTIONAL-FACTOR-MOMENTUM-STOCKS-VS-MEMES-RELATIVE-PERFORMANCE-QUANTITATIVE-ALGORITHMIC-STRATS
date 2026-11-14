@@ -21,6 +21,7 @@ from bitget_stocks_vs_crypto.market import MarketDataError, decimal_value, get_j
 from bitget_stocks_vs_crypto.portfolio import (PaperError, fee_rate_for, parse_book, rebalance_gate, run_snapshot, size_for_target_notional, trade_report)
 from bitget_stocks_vs_crypto.monitor import monitor_open_positions
 from bitget_stocks_vs_crypto.risk import expected_minute_starts
+from bitget_stocks_vs_crypto.performance import (ensure_equity_start, record_equity_point, performance_summary, export_performance_artifacts)
 
 
 def fetch_depth(symbol: str) -> dict[str, Any]:
@@ -432,7 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", default="state/bitget_paper.sqlite3")
     parser.add_argument("--output-dir", default="artifacts/bitget-paper-trading")
-    parser.add_argument("--initial-nav-usdt", default=os.getenv("PAPER_INITIAL_NAV_USDT", "10000"))
+    parser.add_argument("--initial-nav-usdt", default=os.getenv("PAPER_INITIAL_NAV_USDT", "10"))
     parser.add_argument("--fee-rate", default=os.getenv("BITGET_TAKER_FEE_RATE"))
     parser.add_argument("--diagnostic-only", action="store_true", help="Rank and report only; do not modify paper state")
     args = parser.parse_args(argv)
@@ -576,6 +577,41 @@ def main(argv: list[str] | None = None) -> int:
     ).isoformat().replace("+00:00", "Z")
     report["run_started_ms"] = run_started_ms
     report["run_at_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    # Lifetime equity starts at the fixed initial NAV and appends each successful mark/rebalance.
+    if db_path.exists():
+        try:
+            ensure_equity_start(db_path, run_started_ms)
+            paper_snapshot = (report.get("paper") or {}).get("snapshot") or {}
+            monitored = report.get("monitoring") or {}
+            if (report.get("paper") or {}).get("updated") and paper_snapshot.get("nav_usdt") is not None:
+                point, source = paper_snapshot, "REBALANCE"
+                pos = point.get("open_positions") or {}
+            elif monitored.get("nav_usdt") is not None:
+                point, source = monitored, "MONITOR"
+                pos = point.get("open_positions") or {}
+            else:
+                point, source, pos = None, None, {}
+            if point is not None:
+                latest_monitor = (report.get("portfolio") or {}).get("latest_monitor") or {}
+                record_equity_point(
+                    db_path, workflow_started_ms=run_started_ms,
+                    valuation_time_ms=report.get("as_of_server_time_ms"),
+                    nav_usdt=point.get("nav_usdt"), source=source,
+                    cash_usdt=point.get("cash_usdt", latest_monitor.get("cash_usdt")),
+                    unrealized_pnl_usdt=point.get("unrealized_pnl_usdt", latest_monitor.get("unrealized_pnl_usdt")),
+                    gross_exposure_usdt=point.get("gross_exposure_usdt", latest_monitor.get("gross_exposure_usdt")),
+                    long_symbol=(pos.get("LONG") or {}).get("symbol"),
+                    short_symbol=(pos.get("SHORT") or {}).get("symbol"),
+                )
+            perf = performance_summary(db_path)
+            report["performance"] = {k:v for k,v in perf.items()
+                                     if k not in {"equity_points","daily_closes","daily_returns","trades"}}
+            export_performance_artifacts(db_path, out)
+        except Exception as exc:
+            # The reporting layer never undoes committed paper accounting/monitoring.
+            report["performance_warning"] = f"{type(exc).__name__}: {str(exc)[:800]}"
+
     write_outputs(report, db_path, out)
     print(json.dumps({
         "status": report.get("status"), "gates": report.get("gates"),

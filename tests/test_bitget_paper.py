@@ -102,6 +102,25 @@ class PaperLedgerTests(unittest.TestCase):
             self.assertEqual(repeated["status"], "COOLDOWN_ACTIVE")
             self.assertEqual(len(trade_report(db_path)["open_trades"]), 2)
 
+    def test_ten_usdt_starting_capital_can_open_both_minimum_notional_legs(self):
+        as_of = 1_800_000_000_000
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "paper.sqlite3"
+            book_map = books(as_of)
+            result = run_snapshot(ranking(as_of), db_path,
+                depth_fetch=lambda symbol: book_map[symbol],
+                funding_fetch=lambda symbol, start, end: [],
+                funding_mark_fetch=lambda symbol, timestamp: D("100"),
+                initial_nav=D("10"), run_started_ms=as_of)
+            self.assertEqual(result["status"], "UPDATED")
+            self.assertLess(D(result["snapshot"]["nav_usdt"]), D("10"))
+            self.assertEqual(set(result["snapshot"]["open_positions"]), {"LONG", "SHORT"})
+            self.assertTrue(all(D(pos["entry_notional_usdt"]) >= D("5")
+                                for pos in result["snapshot"]["open_positions"].values()))
+            with __import__("sqlite3").connect(db_path) as db:
+                self.assertEqual(db.execute("SELECT initial_nav FROM account WHERE id=1").fetchone()[0], "10")
+                self.assertEqual(db.execute("SELECT cooldown FROM cooldown_control WHERE id=1").fetchone()[0], 1)
+
     def test_cooldown_is_binary_and_resets_on_first_run_after_scheduled_minute(self):
         run_started = 1_800_000_000_123
         as_of = run_started + 20_000

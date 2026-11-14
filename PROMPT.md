@@ -79,3 +79,7 @@ Do not infer class from ticker, `baseCoin`, contract name, project name, token d
 ## Safety boundary and limitations
 
 No API credentials, private account endpoints, account balances, live/demo order endpoints or order submission. Public market-data access does not prove that the user's account is eligible to trade a product. Paper VWAP is not an actual fill record. Liquidation, maintenance margin, ADL, insurance fund, product eligibility and corporate-action effects are not modeled. Never label paper ROI as live account ROI.
+
+## Lifetime performance record
+
+Track every open and closed trade from the $10 USDT reset onward. Persist a workflow-start-timestamped NAV equity curve after each successful mark/rebalance, export the full trade ledger and daily equity series, and recompute annualized Sortino from consecutive UTC daily equity closes using a 0% minimum acceptable return and a 365-day annualizer. Do not report Sortino until at least 20 daily return observations and 5 downside days exist. Preserve the current paper-only boundary.

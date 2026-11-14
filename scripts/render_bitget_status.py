@@ -10,6 +10,15 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
 
+from bitget_stocks_vs_crypto.performance import performance_summary, export_performance_artifacts
+
+
+def _dec(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal("0")
+
 
 def stamp(value: Any) -> str:
     try:
@@ -132,6 +141,10 @@ def render_status(db_path: str | Path, *, workflow_started_ms: int | None = None
                     "ACTIVE (1)" if int(control["cooldown"]) == 1 else "READY (0)")
         age = max(0, (started - int(asof)) // 60_000) if asof is not None else None
         closed_count = int(one("SELECT COUNT(*) FROM trades WHERE status='CLOSED'")[0])
+        performance = performance_summary(path)
+        lifetime_pnl = _dec(nav) - initial
+        equity_points = performance.get("equity_points", [])
+        trade_rows = performance.get("trades", [])
 
         position_lines = ["No open positions."]
         if positions:
@@ -178,6 +191,42 @@ def render_status(db_path: str | Path, *, workflow_started_ms: int | None = None
         ]
         if report_warning:
             lines.append(f"- **Runner report warning:** {cell(report_warning)}")
+        sortino_value = performance.get("sortino")
+        sortino_display = f"{float(sortino_value):.2f}" if sortino_value is not None else "Not yet statistically available"
+        trade_history_lines = [
+            "| Trade | Entry date | Leg | Contract | Status | Entry price | Exit price | Net P&L | Trade ROI |",
+            "|---:|---|---|---|---|---:|---:|---:|---:|",
+        ]
+        if trade_rows:
+            for trade in trade_rows:
+                trade_history_lines.append(
+                    f"| {trade.get('trade_id')} | {cell(trade.get('entry_date') or '—')} | "
+                    f"{cell(trade.get('leg') or '—')} | {cell(trade.get('symbol') or '—')} | "
+                    f"{cell(trade.get('status') or '—')} | {fmt(trade.get('entry_price'), 8)} | "
+                    f"{fmt(trade.get('exit_price'), 8)} | "
+                    f"{fmt(trade.get('net_pnl')) if trade.get('net_pnl') is not None else '—'} USDT | "
+                    f"{pct(trade.get('trade_roi_pct'))} |"
+                )
+        else:
+            trade_history_lines.append("| — | — | — | — | No trades yet | — | — | — | — |")
+        lines.extend(["", "## Lifetime strategy performance", "",
+            f"- **Initial capital:** {fmt(initial)} USDT",
+            f"- **Current equity P&L vs initial capital:** **{fmt(lifetime_pnl)} USDT**",
+            f"- **Lifetime portfolio ROI:** **{pct(roi)}**",
+            f"- **Equity-curve observations:** {len(equity_points)}",
+            f"- **Closed trades:** {performance.get('closed_trade_count', 0)} | **Open trades:** {performance.get('open_trade_count', 0)}",
+            f"- **Realized net P&L on closed trades:** {fmt(performance.get('closed_net_pnl_usdt'))} USDT",
+            f"- **Closed-trade win rate:** {pct(performance.get('win_rate_pct'))}",
+            f"- **Profit factor:** {performance.get('profit_factor') if performance.get('profit_factor') is not None else 'Not available'}",
+            f"- **Annualized Sortino ratio:** **{sortino_display}**",
+            f"- **Sortino status:** {cell(performance.get('sortino_status', 'No equity history'))}",
+            f"- **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least {performance.get('sortino_min_daily_returns', 20)} valid daily returns and {performance.get('sortino_min_downside_days', 5)} negative days.",
+            f"- **Sampled equity-curve MDD:** {pct(performance.get('equity_curve_mdd_pct'))}",
+            "", "![Portfolio equity curve](equity_curve.svg)",
+            "[Complete equity curve CSV](equity_curve.csv) · [Daily equity and returns](daily_equity.csv) · [Complete trade history](trade_history.csv)",
+            "", "### Full trade history", "", *trade_history_lines,
+            "", "Sortino remains unavailable until enough daily observations exist; no ratio is inferred from a short initial sample.", ""
+        ])
         lines.extend(["", "## Open positions", "", *position_lines, "", "## Risk", "",
             f"- **Strategy maximum drawdown:** {pct(strategy_mdd)}" + (" (observed minute history)" if strategy_mdd is not None else " (not established from minute history yet)"),
             f"- **Current holding-cycle MDD:** {pct(cycle_mdd)}" + (" (observed bars; cycle may be partial)" if cycle_mdd is not None and quality != "COMPLETE_CURRENT_CYCLE" else ("" if cycle_mdd is not None else " (not established yet)")),
@@ -217,6 +266,7 @@ def main() -> int:
     parser.add_argument("--repository")
     parser.add_argument("--report-json")
     args = parser.parse_args()
+    export_performance_artifacts(args.db_path, Path(args.output).parent)
     content = render_status(args.db_path, workflow_started_ms=args.workflow_start_ms,
                             run_id=args.run_id, event_name=args.event_name, mode=args.mode,
                             repository=args.repository, report_json=args.report_json)
