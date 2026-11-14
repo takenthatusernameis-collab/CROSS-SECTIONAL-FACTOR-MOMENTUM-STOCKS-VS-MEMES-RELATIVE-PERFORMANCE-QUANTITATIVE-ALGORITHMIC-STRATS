@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from bitget_stocks_vs_crypto.market import MarketDataError, decimal_value, get_json, build_ranking_report
-from bitget_stocks_vs_crypto.portfolio import PaperError, run_snapshot, trade_report
+from bitget_stocks_vs_crypto.portfolio import (PaperError, fee_rate_for, parse_book, run_snapshot, size_for_target_notional, trade_report)
 
 
 def fetch_depth(symbol: str) -> dict[str, Any]:
@@ -29,6 +29,55 @@ def fetch_depth(symbol: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise PaperError(f"{symbol}: malformed Bitget order-book response")
     return data
+
+
+def read_only_execution_preflight(report: dict[str, Any], initial_nav: Decimal,
+                                  fee_override: Decimal | None) -> dict[str, Any]:
+    """Check the selected pair's exact entry size against current public max-depth books.
+
+    This is a read-only diagnostic: it does not initialize or modify SQLite state.
+    """
+    markets = {row.get("symbol"): row for row in report.get("market_results", [])
+               if isinstance(row, dict)}
+    leaders = report.get("leaders", {})
+    selections = (
+        ("LONG", leaders.get("long_stock_top_gainer"), "asks", "BUY"),
+        ("SHORT", leaders.get("short_crypto_bottom_loser"), "bids", "SELL"),
+    )
+    if any(not isinstance(item, dict) for _, item, _, _ in selections):
+        raise PaperError("Both selected market leaders are required for depth preflight")
+    fees = []
+    for _, item, _, _ in selections:
+        market = markets.get(item.get("symbol"))
+        if not isinstance(market, dict):
+            raise PaperError(f"{item.get('symbol')}: selected market metadata is unavailable")
+        fees.append(fee_rate_for(market, fee_override))
+    target = initial_nav / (Decimal("1") + fees[0] + fees[1])
+    legs = {}
+    for (leg, leader, side, action), fee in zip(selections, fees):
+        symbol = leader["symbol"]
+        market = markets[symbol]
+        raw_book = fetch_depth(symbol)
+        book = parse_book(raw_book)
+        age_ms = abs(int(report["as_of_server_time_ms"]) - int(book["timestamp_ms"]))
+        if age_ms > 900_000:
+            raise PaperError(f"{symbol}: order book is stale by {age_ms} ms")
+        qty, price, notional = size_for_target_notional(target, book[side], market)
+        legs[leg] = {
+            "symbol": symbol, "action": action, "requested_target_notional_usdt": str(target),
+            "sized_quantity": str(qty), "estimated_entry_vwap": str(price),
+            "estimated_entry_notional_usdt": str(notional),
+            "estimated_entry_fee_usdt": str(notional * fee), "fee_rate": str(fee),
+            "book_age_ms": age_ms, "bid_levels": len(book["bids"]),
+            "ask_levels": len(book["asks"]), "depth_status": "PASS",
+        }
+    return {
+        "status": "PASS",
+        "scope": "read-only entry-depth and lot-size preflight; no simulated fills or positions",
+        "initial_nav_usdt": str(initial_nav),
+        "gross_target_usdt": str(target * 2),
+        "legs": legs,
+    }
 
 
 def fetch_funding_events(symbol: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
@@ -111,6 +160,17 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
         item = report.get("leaders", {}).get(key)
         if item:
             lines.append(f"- {label}: **{item.get('symbol')}** — {item.get('return_24h_pct')}% (source price24hPcnt={item.get('price24hPcnt')})")
+    preflight = report.get("execution_preflight")
+    if preflight:
+        lines.extend(["", "## Read-only execution preflight", "",
+            f"- Depth/lot-size gate: **{preflight.get('status')}**",
+            f"- Scope: {preflight.get('scope', 'selected pair public depth check')}",
+        ])
+        for leg, item in preflight.get("legs", {}).items():
+            lines.append(f"- {leg}: {item.get('symbol')} | target {item.get('estimated_entry_notional_usdt')} USDT | VWAP {item.get('estimated_entry_vwap')} | entry fee {item.get('estimated_entry_fee_usdt')} USDT | levels bid/ask {item.get('bid_levels')}/{item.get('ask_levels')}")
+        failure = preflight.get("failure")
+        if failure:
+            lines.append(f"- Block: {failure.get('stage')} — {failure.get('message')}")
     lines.extend(["", "## Paper portfolio", ""])
     paper = report.get("paper")
     if paper:
@@ -192,9 +252,24 @@ def main(argv: list[str] | None = None) -> int:
     report = build_ranking_report()
     report["paper"] = None
     report["portfolio"] = trade_report(db_path)
-    if report.get("gates", {}).get("ranking") == "PASS" and not args.diagnostic_only:
+    override = D(args.fee_rate) if args.fee_rate not in (None, "") else None
+    if report.get("gates", {}).get("ranking") == "PASS" and args.diagnostic_only:
         try:
-            override = D(args.fee_rate) if args.fee_rate not in (None, "") else None
+            report["execution_preflight"] = read_only_execution_preflight(
+                report, D(args.initial_nav_usdt), override
+            )
+            report["status"] = "DIAGNOSTIC_ONLY_DEPTH_PASS"
+        except Exception as exc:
+            report["execution_preflight"] = {
+                "status": "BLOCKED",
+                "failure": {"stage": getattr(exc, "stage", "execution_preflight"),
+                            "http_status": getattr(exc, "http_status", None),
+                            "exception_type": type(exc).__name__, "message": str(exc)[:1600]},
+                "portfolio_state_changed": False,
+            }
+            report["status"] = "DIAGNOSTIC_ONLY_DEPTH_BLOCKED"
+    elif report.get("gates", {}).get("ranking") == "PASS":
+        try:
             paper = run_snapshot(report, db_path, depth_fetch=fetch_depth,
                 funding_fetch=fetch_funding_events, funding_mark_fetch=fetch_funding_mark,
                 initial_nav=D(args.initial_nav_usdt), fee_override=override)
@@ -207,17 +282,15 @@ def main(argv: list[str] | None = None) -> int:
                                  "http_status": getattr(exc, "http_status", None),
                                  "exception_type": type(exc).__name__, "message": str(exc)[:1600],
                                  "portfolio_state_changed": False}
-    elif report.get("gates", {}).get("ranking") != "PASS":
-        report["status"] = "RANKING_BLOCKED"
     else:
-        report["status"] = "DIAGNOSTIC_ONLY"
+        report["status"] = "RANKING_BLOCKED"
     report["run_at_utc"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     write_outputs(report, db_path, out)
     print(json.dumps({"status":report.get("status"),"gates":report.get("gates"),
         "leaders":report.get("leaders"),"paper":report.get("paper"),
         "portfolio_roi_pct":report.get("portfolio",{}).get("portfolio_total_roi_pct"),
         "failure":report.get("failure"),"orders":"NONE"},indent=2,sort_keys=True,default=str))
-    if report["status"] in {"PAPER_BLOCKED","RANKING_BLOCKED"}:
+    if report["status"] in {"PAPER_BLOCKED","RANKING_BLOCKED","DIAGNOSTIC_ONLY_DEPTH_BLOCKED"}:
         return 1
     return 0
 
