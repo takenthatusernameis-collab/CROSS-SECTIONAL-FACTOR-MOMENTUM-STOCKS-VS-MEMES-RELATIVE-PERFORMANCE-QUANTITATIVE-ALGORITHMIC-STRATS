@@ -6,20 +6,20 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **8.97 USDT** |
+| Current NAV | **8.95 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-1.03 USDT** |
-| Portfolio ROI vs starting capital | **-10.31%** |
-| Current-cycle ROI | -10.10% |
-| Unrealized P&L (gross) | -1.02 USDT |
+| NAV change vs starting capital | **-1.05 USDT** |
+| Portfolio ROI vs starting capital | **-10.47%** |
+| Current-cycle ROI | -10.26% |
+| Unrealized P&L (gross) | -1.04 USDT |
 | Cumulative realized gross P&L | 0.00 USDT |
 | Fees paid to date | 0.01 USDT |
 | Funding posted to ledger | 0.00 USDT |
 | Estimated funding pending | 0.00 USDT |
-| Gross exposure | 18.38 USDT |
+| Gross exposure | 18.40 USDT |
 | Closed trades | 0 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-14 06:30:40 UTC._
+_NAV source: live mark-to-market observation. Values as of 2026-11-14 06:31:24 UTC._
 
 ## Latest workflow result
 
@@ -31,9 +31,9 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-14 06:30:40 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-1.03 USDT**
-- **Lifetime portfolio ROI:** **-10.31%**
-- **Equity-curve observations:** 9
+- **Current equity P&L vs initial capital:** **-1.05 USDT**
+- **Lifetime portfolio ROI:** **-10.47%**
+- **Equity-curve observations:** 10
 - **Closed trades:** 0 | **Open trades:** 2
 - **Realized net P&L on closed trades:** 0.00 USDT
 - **Closed-trade win rate:** Not available
@@ -41,7 +41,7 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-14 06:30:40 U
 - **Annualized Sortino ratio:** **Not yet statistically available**
 - **Sortino status:** INSUFFICIENT_HISTORY: 0/20 daily returns
 - **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
-- **Sampled equity-curve MDD:** -10.55%
+- **Sampled equity-curve MDD:** -10.71%
 
 ![Portfolio equity curve](equity_curve.svg)
 [Complete equity curve CSV](equity_curve.csv) · [Daily equity and returns](daily_equity.csv) · [Complete trade history](trade_history.csv)
@@ -60,14 +60,14 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | SOXSUSDT | 0.180000 | 52.82500000 | 52.86400000 | 0.01 USDT | -0.05% |
-| SHORT | BANANAS31USDT | 2,000.000000 | 0.00391800 | 0.00443200 | -1.03 USDT | -13.24% |
+| LONG | SOXSUSDT | 0.180000 | 52.82500000 | 52.87300000 | 0.01 USDT | -0.03% |
+| SHORT | BANANAS31USDT | 2,000.000000 | 0.00391800 | 0.00444100 | -1.05 USDT | -13.47% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -13.06% (observed minute history)
 - **Current holding-cycle MDD:** -13.06%
-- **Minute-data coverage:** 241/241 (100.00%)
+- **Minute-data coverage:** 242/242 (100.00%)
 - **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
 - **Historical risk intervals:** 0 complete / 0 incomplete
 - **Latest completed risk interval:** NO_PRIOR_POSITIONS
@@ -82,11 +82,11 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-14 06:30:43 UTC
-- **Paper workflow started:** 2026-11-14 06:29:14 UTC
-- **Latest saved market observation:** 2026-11-14 06:30:40 UTC
+- **STATUS.md generated:** 2026-11-14 06:31:27 UTC
+- **Paper workflow started:** 2026-11-14 06:30:55 UTC
+- **Latest saved market observation:** 2026-11-14 06:31:24 UTC
 - **Workflow trigger:** **workflow_dispatch / paper**
-- **GitHub Actions run:** [43566553705](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/43566553705)
+- **GitHub Actions run:** [43566557523](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/43566557523)
 
 ## Interpretation notes
 
