@@ -9,7 +9,7 @@ on:
         description: "Diagnostic only, or run the same monitored/cooldown-gated paper cycle now"
         required: true
         type: choice
-        default: diagnostic
+        default: paper
         options:
           - diagnostic
           - paper
@@ -44,7 +44,7 @@ jobs:
       BITGET_TAKER_FEE_RATE: ${{ vars.BITGET_TAKER_FEE_RATE }}
       PAPER_DB: state/bitget_paper.sqlite3
       PAPER_OUTPUT: artifacts/bitget-paper-trading
-      MODE: ${{ inputs.mode || 'scheduled' }}
+      MODE: ${{ inputs.mode || 'paper' }}
     steps:
       # Capture the job's actual start before checkout, setup, tests, or APIs.
       # The Python runner uses this fixed timestamp for cooldown and risk windows.
