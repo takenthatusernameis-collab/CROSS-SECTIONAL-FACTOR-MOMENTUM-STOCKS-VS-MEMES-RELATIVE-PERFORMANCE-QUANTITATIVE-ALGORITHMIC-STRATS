@@ -23,6 +23,7 @@ on:
       - "tests/test_bitget_*.py"
       - "README.md"
       - "PROMPT.md"
+      - "recovery/restore-bitget-paper-state.json"
 
 # Only one job may read-modify-push the SQLite state branch at a time.
 # Do not cancel a running accounting/monitor cycle.
@@ -69,6 +70,88 @@ jobs:
 
       - name: Compile source and tests
         run: python -m compileall -q bitget_stocks_vs_crypto scripts tests
+
+      # Fail closed while an earlier paper cycle has not reached durable storage.
+      # The recovery push below bypasses this guard; schedules/manual paper cannot.
+      - name: Block paper cycles while recovery is pending
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_BRANCH="bitget-paper-portfolio-state"
+          git fetch --no-tags origin "+refs/heads/${STATE_BRANCH}:refs/remotes/origin/${STATE_BRANCH}"
+          if git cat-file -e "refs/remotes/origin/${STATE_BRANCH}:RECOVERY_REQUIRED.md" 2>/dev/null; then
+            echo "RECOVERY BLOCKED: the previous $10 portfolio has not yet been restored. No paper runner was started." >&2
+            exit 1
+          fi
+
+      # Recovery is deliberately a push-triggered, restore-only operation. It
+      # retrieves the exact database artifact from the interrupted run and never
+      # executes a new market cycle.
+      - name: Download exact interrupted paper backup
+        if: github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json')
+        uses: actions/download-artifact@v4
+        with:
+          name: bitget-stocks-vs-crypto-43546451119
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: 43546451119
+          path: recovered-artifact
+
+      - name: Verify and stage exact recovered paper ledger
+        if: github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json')
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, shutil, sqlite3
+          from decimal import Decimal
+          from pathlib import Path
+
+          root = Path("recovered-artifact")
+          source_db = root / "state/bitget_paper.sqlite3"
+          source_report = root / "artifacts/bitget-paper-trading/bitget_paper_report.json"
+          if not source_db.is_file() or not source_report.is_file():
+              raise SystemExit("Exact recovery artifact is incomplete: expected SQLite database and original paper report.")
+          report = json.loads(source_report.read_text(encoding="utf-8"))
+          if report.get("status") != "PAPER_UPDATED" or report.get("paper", {}).get("status") != "UPDATED":
+              raise SystemExit("Recovery report does not identify a successful original paper update.")
+          if report.get("paper", {}).get("cooldown", {}).get("value") != 1:
+              raise SystemExit("Recovery report cooldown does not match the opened portfolio.")
+          report_positions = report["paper"]["snapshot"]["open_positions"]
+          if {k: v.get("symbol") for k, v in report_positions.items()} != {"LONG": "SOXSUSDT", "SHORT": "BANANAS31USDT"}:
+              raise SystemExit("Recovery report open positions do not match the authorized campaign.")
+
+          con = sqlite3.connect(source_db)
+          con.row_factory = sqlite3.Row
+          try:
+              integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+              if integrity != "ok": raise SystemExit(f"Recovered SQLite integrity failure: {integrity}")
+              account = con.execute("SELECT initial_nav,cash FROM account WHERE id=1").fetchone()
+              if account is None or Decimal(account["initial_nav"]) != Decimal("10"):
+                  raise SystemExit(f"Recovered initial NAV is not 10 USDT: {dict(account) if account else None}")
+              positions = {r["leg"]: r["symbol"] for r in con.execute("SELECT leg,symbol FROM positions")}
+              if positions != {"LONG": "SOXSUSDT", "SHORT": "BANANAS31USDT"}:
+                  raise SystemExit(f"Recovered open positions do not match the original run: {positions}")
+              trades = con.execute("SELECT COUNT(*) AS n FROM trades WHERE status='OPEN'").fetchone()["n"]
+              if trades != 2: raise SystemExit(f"Expected exactly 2 open trades in recovery DB, found {trades}")
+              control = con.execute("SELECT cooldown,activated_at_ms,reset_at_ms FROM cooldown_control WHERE id=1").fetchone()
+              if control is None or tuple(control) != (1, 1794623278790, 1794709680000):
+                  raise SystemExit(f"Recovered cooldown state does not match run #22: {tuple(control) if control else None}")
+              points = con.execute("SELECT COUNT(*) FROM equity_curve").fetchone()[0]
+              if points != 2: raise SystemExit(f"Expected START and REBALANCE equity points, found {points}")
+              ledger_opens = con.execute("SELECT COUNT(*) FROM ledger WHERE event_type='OPEN'").fetchone()[0]
+              if ledger_opens != 2: raise SystemExit(f"Expected two OPEN ledger events, found {ledger_opens}")
+          finally:
+              con.close()
+
+          db_hash = hashlib.sha256(source_db.read_bytes()).hexdigest()
+          Path("state").mkdir(exist_ok=True)
+          Path("artifacts/bitget-paper-trading").mkdir(parents=True, exist_ok=True)
+          shutil.copy2(source_db, "state/bitget_paper.sqlite3")
+          shutil.copy2(source_report, "artifacts/bitget-paper-trading/bitget_paper_report.json")
+          print(f"RECOVERY VERIFIED: run=43546451119; initial_nav=10; positions={positions}; open_trades=2; cooldown=1; equity_points=2; sha256={db_hash}")
+          PY
 
       - name: Restore durable SQLite paper ledger
         if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')
@@ -164,11 +247,11 @@ jobs:
         run: python scripts/run_bitget_paper.py --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
 
       - name: Run read-only ranking diagnostic on pushes/manual diagnostic
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode != 'paper')
+        if: (github.event_name == 'push' && !contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json')) || (github.event_name == 'workflow_dispatch' && inputs.mode != 'paper')
         run: python scripts/run_bitget_paper.py --diagnostic-only --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
 
       - name: Check SQLite integrity before persistence
-        if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) && success()
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json'))) && success()
         run: |
           python - <<'PY'
           import sqlite3
@@ -188,7 +271,7 @@ jobs:
           PY
 
       - name: Persist SQLite portfolio and monitoring state
-        if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) && success()
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json'))) && success()
         shell: bash
         run: |
           set -euo pipefail
@@ -234,8 +317,9 @@ jobs:
             cp "$PAPER_OUTPUT/$required" "$required"
           done
           if [[ -f RESET_PENDING.md ]]; then rm RESET_PENDING.md; fi
+          if [[ -f RECOVERY_REQUIRED.md ]]; then rm RECOVERY_REQUIRED.md; fi
           git add state/bitget_paper.sqlite3 STATUS.md equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json
-          git add -u RESET_PENDING.md 2>/dev/null || true
+          git add -u -- RESET_PENDING.md RECOVERY_REQUIRED.md 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -m "Persist lifetime paper performance and readable status"
           fi
