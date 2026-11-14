@@ -23,7 +23,7 @@ from bitget_stocks_vs_crypto.portfolio import (PaperError, fee_rate_for, parse_b
 
 def fetch_depth(symbol: str) -> dict[str, Any]:
     payload, _ = get_json("/api/v2/mix/market/merge-depth", {
-        "symbol": symbol, "productType": "USDT-FUTURES", "limit": "max",
+        "symbol": symbol, "productType": "USDT-FUTURES",
     }, stage=f"depth_{symbol}")
     data = payload.get("data")
     if not isinstance(data, dict):
