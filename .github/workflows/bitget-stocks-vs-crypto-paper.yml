@@ -33,6 +33,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   bitget-paper:
@@ -89,7 +90,7 @@ jobs:
       # retrieves the exact database artifact from the interrupted run and never
       # executes a new market cycle.
       - name: Download exact interrupted paper backup
-        if: github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json')
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE')
         uses: actions/download-artifact@v4
         with:
           name: bitget-stocks-vs-crypto-43546451119
@@ -99,7 +100,7 @@ jobs:
           path: recovered-artifact
 
       - name: Verify and stage exact recovered paper ledger
-        if: github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json')
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE')
         shell: bash
         run: |
           set -euo pipefail
@@ -247,11 +248,11 @@ jobs:
         run: python scripts/run_bitget_paper.py --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
 
       - name: Run read-only ranking diagnostic on pushes/manual diagnostic
-        if: (github.event_name == 'push' && !contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json')) || (github.event_name == 'workflow_dispatch' && inputs.mode != 'paper')
+        if: (github.event_name == 'push' && !contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE')) || (github.event_name == 'workflow_dispatch' && inputs.mode != 'paper')
         run: python scripts/run_bitget_paper.py --diagnostic-only --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
 
       - name: Check SQLite integrity before persistence
-        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json'))) && success()
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE'))) && success()
         run: |
           python - <<'PY'
           import sqlite3
@@ -271,7 +272,7 @@ jobs:
           PY
 
       - name: Persist SQLite portfolio and monitoring state
-        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.added, 'recovery/restore-bitget-paper-state.json'))) && success()
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE'))) && success()
         shell: bash
         run: |
           set -euo pipefail
