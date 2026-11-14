@@ -1,11 +1,8 @@
 name: Stocks vs Memes — Daily UTC Paper Runner
 
 on:
-  # Start shortly before the daily candle boundary, then wait for 00:00 UTC.
-  # A non-zero minute avoids GitHub's documented top-of-hour scheduler load.
-  schedule:
-    - cron: "58 23 * * *"
-  # Manual runs are diagnostic-only; they never open or change paper positions.
+  # Intentionally unscheduled: retain manual diagnostic access only.
+  # The active five-minute paper schedule lives in bitget-stocks-vs-crypto-paper.yml.
   workflow_dispatch:
 
 concurrency:
