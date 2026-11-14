@@ -48,7 +48,7 @@ Do not infer class from ticker, `baseCoin`, contract name, project name, token d
 - Apply funding at each observed settlement. The rate comes from Bitget public funding history. Estimate the settlement mark using the matching one-minute historical mark candle, or the preceding completed minute's close if the event is not aligned to a minute. Disclose minute-resolution uncertainty.
 - For linear USDT perpetuals, funding cashflow is negative for a long when the funding rate is positive and positive for a short, with the sign reversed for negative rates.
 - Track each leg's entry/exit price, quantity, notional, gross P&L, entry/exit fees, funding, net P&L and net trade ROI (`net P&L / entry notional`).
-- Track portfolio cash, realized and unrealized P&L, fees, funding, gross exposure, NAV, daily return and cumulative portfolio ROI (`NAV / initial NAV - 1`).
+- Track portfolio cash, realized and unrealized P&L, fees, funding, gross exposure, NAV, daily return and cumulative portfolio ROI (`NAV / initial NAV - 1`). Preserve every closed and open trade in the lifetime ledger. Append a workflow-start-timestamped portfolio-equity point after each successful monitor/rebalance. Export the complete trade history, equity curve and daily equity returns. Recompute annualized Sortino from consecutive UTC daily equity closes with a 0% minimum acceptable return and √365 annualization; show it as unavailable until at least 20 daily returns and 5 negative days have been observed.
 - Treat funding, closes, opens, ledger rows, trade updates and daily snapshot as one atomic SQLite transition. Any market-data/accounting failure rolls back the full transition.
 
 ## Minute spread and risk analytics (accounting only; do not change selection)
@@ -69,7 +69,7 @@ Do not infer class from ticker, `baseCoin`, contract name, project name, token d
 - SQLite path: `state/bitget_paper.sqlite3`.
 - Durable state branch: `bitget-paper-portfolio-state`.
 - Keep append-only transaction events and closed trade history. Persist daily NAV snapshots. Upload per-run JSON/Markdown plus closed-trade and NAV CSVs.
-- Initial NAV defaults to 10,000 USDT and is immutable after database initialization.
+- Initial NAV is fixed at 10 USDT for the reset campaign and is immutable after database initialization.
 - Manual diagnostic runs must never change paper positions or monitoring state. Manual paper dispatch is opt-in and obeys the same persisted entry-time cooldown, candle-close requirement and first-run-after-expiry guard as the scheduled workflow.
 - Scheduled workflow runs every five minutes (`*/5 * * * *`). Each scheduled run performs market ranking and, when an open pair exists, analytics-only monitoring. Portfolio transitions remain cooldown-gated as specified above.
 - GitHub Actions concurrency must serialize runs so two jobs cannot monitor or mutate the same SQLite file concurrently. Do not cancel a job while it is persisting state.
