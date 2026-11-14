@@ -294,6 +294,18 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
                 lines.append(f"- Closed trade #{trade.get('trade_id')} {trade.get('leg')} {trade.get('symbol')}: net P&L {trade.get('net_pnl')} USDT; ROI {trade.get('trade_roi_pct')}%")
         if paper.get("message"):
             lines.append(f"- Note: {paper['message']}")
+        closed_period = paper.get("closed_period_performance")
+        if closed_period:
+            lines.extend(["", "## Closed workflow-to-workflow performance period", "",
+                f"- Actual period start (workflow ms): {closed_period.get('period_start_ms')}",
+                f"- Actual period end (first post-reset workflow ms): {closed_period.get('period_end_ms')}",
+                f"- Observed period duration: {closed_period.get('duration_ms')} ms",
+                f"- Period ROI: {closed_period.get('period_roi_pct')}%",
+                f"- Period MDD: {closed_period.get('period_mdd_pct')}%",
+                f"- Minute-data coverage: {closed_period.get('coverage_pct')}%",
+                f"- Measurement status: **{closed_period.get('status')}**",
+                f"- Rebalance delay after measurement boundary: {closed_period.get('rebalance_delay_ms')} ms",
+            ])
     elif report.get("failure"):
         lines.append("- No portfolio state transition was committed.")
     if report.get("portfolio"):
@@ -323,15 +335,19 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
     gate = report.get("rebalance_gate")
     if gate:
         lines.extend(["", "## Persistent rebalance safeguard", "",
+            f"- Binary cooldown value: **{gate.get('cooldown')}**",
             f"- Gate: **{gate.get('reason')}**",
-            f"- Eligible after (UTC ms): {gate.get('eligible_after_ms')}",
+            f"- Activated at (UTC ms): {gate.get('activated_at_ms')}",
+            f"- Scheduled reset after the +24h minute closes (UTC ms): {gate.get('eligible_after_ms')}",
+            f"- First post-reset workflow boundary (UTC ms): {gate.get('last_reset_run_started_ms')}",
             f"- Seconds remaining at workflow start: {gate.get('seconds_remaining')}",
-            "- The first run that starts after eligibility may rebalance; exact cron/expiry coincidence is not required.",
+            "- A zero flag permits the first run that starts after reset to build the next pair from that run's refreshed feed.",
         ])
     if monitoring:
         lines.extend(["", "## Five-minute open-position monitoring", "",
             f"- Monitoring status: **{monitoring.get('status')}**",
-            f"- Marked NAV: {monitoring.get('nav_usdt')} USDT | portfolio ROI: {monitoring.get('portfolio_roi_pct')}%",
+            f"- Marked NAV: {monitoring.get('nav_usdt')} USDT | cumulative ROI: {monitoring.get('portfolio_roi_pct')}% | current-cycle ROI: {monitoring.get('cycle_roi_pct')}%",
+            f"- Performance window start (workflow ms): {monitoring.get('cycle_start_ms')} | boundary (workflow ms): {monitoring.get('period_end_ms')}",
             f"- Pending estimated funding (not yet posted to accounting ledger): {monitoring.get('funding_pending_usdt')} USDT",
             f"- Synthetic spread mark: {monitoring.get('spread_ratio_mark')} | observed high/low: {monitoring.get('spread_high_ratio')} / {monitoring.get('spread_low_ratio')}",
             f"- Spread drawdown: {monitoring.get('spread_drawdown_pct')}% | holding-cycle MDD: {monitoring.get('daily_mdd_pct')}% | strategy MDD: {monitoring.get('strategy_mdd_pct')}%",
@@ -379,21 +395,23 @@ def write_outputs(report: dict[str, Any], db_path: Path, output_dir: Path) -> No
             if "risk_intervals" in tables:
                 with (output_dir / "daily_risk.csv").open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.writer(handle)
-                    writer.writerow(["snapshot_date","status","long_symbol","short_symbol","expected_minutes",
+                    writer.writerow(["snapshot_date","period_start_ms","period_end_ms","period_duration_ms",
+                        "period_roi_pct","status","long_symbol","short_symbol","expected_minutes",
                         "matched_minutes","coverage_pct","spread_open_ratio","spread_high_ratio",
                         "spread_low_ratio","spread_close_ratio","spread_drawdown_pct","nav_min_intraday",
-                        "daily_mdd_pct","strategy_mdd_pct","nav_after_rebalance","error"])
-                    for row in db.execute("""SELECT snapshot_date,status,long_symbol,short_symbol,
-                        expected_minutes,matched_minutes,coverage_pct,spread_open_ratio,spread_high_ratio,
-                        spread_low_ratio,spread_close_ratio,spread_drawdown_pct,nav_min_intraday,
-                        daily_mdd_pct,strategy_mdd_pct,nav_after_rebalance,error
-                        FROM risk_intervals ORDER BY snapshot_date"""):
+                        "period_mdd_pct","strategy_mdd_pct","nav_after_rebalance","error"])
+                    for row in db.execute("""SELECT snapshot_date,period_start_ms,period_end_ms,
+                        CASE WHEN period_start_ms IS NOT NULL THEN period_end_ms-period_start_ms ELSE NULL END,
+                        period_roi_pct,status,long_symbol,short_symbol,expected_minutes,matched_minutes,
+                        coverage_pct,spread_open_ratio,spread_high_ratio,spread_low_ratio,spread_close_ratio,
+                        spread_drawdown_pct,nav_min_intraday,daily_mdd_pct,strategy_mdd_pct,nav_after_rebalance,error
+                        FROM risk_intervals ORDER BY period_end_ms"""):
                         writer.writerow(row)
             if "monitor_observations" in tables:
                 with (output_dir / "intraday_monitor.csv").open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.writer(handle)
-                    writer.writerow(["observed_at_ms","cycle_start_ms","eligible_after_ms","status","nav_usdt","portfolio_roi_pct","funding_pending_usdt","long_symbol","long_mark_price","long_unrealized_pnl_usdt","long_trade_roi_pct","short_symbol","short_mark_price","short_unrealized_pnl_usdt","short_trade_roi_pct","spread_ratio_mark","spread_high_ratio","spread_low_ratio","spread_drawdown_pct","daily_mdd_pct","strategy_mdd_pct","expected_minutes","matched_minutes","coverage_pct","seconds_to_rebalance","last_error"])
-                    for row in db.execute("""SELECT observed_at_ms,cycle_start_ms,eligible_after_ms,status,nav_usdt,portfolio_roi_pct,funding_pending_usdt,long_symbol,long_mark_price,long_unrealized_pnl_usdt,long_trade_roi_pct,short_symbol,short_mark_price,short_unrealized_pnl_usdt,short_trade_roi_pct,spread_ratio_mark,spread_high_ratio,spread_low_ratio,spread_drawdown_pct,daily_mdd_pct,strategy_mdd_pct,expected_minutes,matched_minutes,coverage_pct,seconds_to_rebalance,last_error FROM monitor_observations ORDER BY observed_at_ms"""):
+                    writer.writerow(["observed_at_ms","cycle_start_ms","eligible_after_ms","status","nav_usdt","portfolio_roi_pct","cycle_roi_pct","funding_pending_usdt","long_symbol","long_mark_price","long_unrealized_pnl_usdt","long_trade_roi_pct","short_symbol","short_mark_price","short_unrealized_pnl_usdt","short_trade_roi_pct","spread_ratio_mark","spread_high_ratio","spread_low_ratio","spread_drawdown_pct","daily_mdd_pct","strategy_mdd_pct","expected_minutes","matched_minutes","coverage_pct","seconds_to_rebalance","last_error"])
+                    for row in db.execute("""SELECT observed_at_ms,cycle_start_ms,eligible_after_ms,status,nav_usdt,portfolio_roi_pct,cycle_roi_pct,funding_pending_usdt,long_symbol,long_mark_price,long_unrealized_pnl_usdt,long_trade_roi_pct,short_symbol,short_mark_price,short_unrealized_pnl_usdt,short_trade_roi_pct,spread_ratio_mark,spread_high_ratio,spread_low_ratio,spread_drawdown_pct,daily_mdd_pct,strategy_mdd_pct,expected_minutes,matched_minutes,coverage_pct,seconds_to_rebalance,last_error FROM monitor_observations ORDER BY observed_at_ms"""):
                         writer.writerow(row)
             if "monitor_minute_metrics" in tables:
                 with (output_dir / "latest_minute_risk.csv").open("w", newline="", encoding="utf-8") as handle:
@@ -420,9 +438,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     db_path = Path(args.db_path)
     out = Path(args.output_dir)
-    # Capture job start BEFORE ranking/API work. A job started before cooldown
-    # expiry cannot rebalance even if its market-data calls finish afterwards.
-    run_started_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    # The workflow captures this before checkout/setup/tests. Local runs fall
+    # back to this function's first timestamp before any market-data request.
+    raw_started_ms = os.getenv("PAPER_WORKFLOW_STARTED_MS")
+    try:
+        run_started_ms = int(raw_started_ms) if raw_started_ms else int(datetime.now(timezone.utc).timestamp() * 1000)
+    except (TypeError, ValueError) as exc:
+        raise PaperError("PAPER_WORKFLOW_STARTED_MS must be an integer Unix-millisecond timestamp") from exc
+    if run_started_ms <= 0:
+        raise PaperError("Workflow start timestamp must be positive")
     report = build_ranking_report()
     report["paper"] = None
     report["monitoring"] = None
@@ -449,9 +473,17 @@ def main(argv: list[str] | None = None) -> int:
         else:
             report["status"] = "RANKING_BLOCKED"
     else:
-        # Open positions are monitored regardless of whether ranking is available.
+        # Read the durable cooldown before monitoring. The first job start after
+        # reset fixes the performance-window end, even if fresh ranking/depth
+        # validation fails and the portfolio construction must be retried later.
         open_trades = report.get("portfolio", {}).get("open_trades", [])
         if open_trades:
+            gate = rebalance_gate(db_path, run_started_ms)
+            fixed_end = gate.get("last_reset_run_started_ms")
+            performance_end_ms = (
+                int(fixed_end) if int(gate.get("cooldown", 1)) == 0 and fixed_end is not None
+                else run_started_ms
+            )
             try:
                 server_ms = report.get("as_of_server_time_ms") or report.get("api", {}).get("server_time_ms")
                 if not isinstance(server_ms, int) or server_ms <= 0:
@@ -463,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
                     now_ms=server_ms,
                     initial_nav=D(args.initial_nav_usdt),
                     ticker_fetch=fetch_monitor_tickers,
+                    metrics_end_ms=performance_end_ms,
                     funding_fetch=fetch_funding_events,
                     funding_mark_fetch=fetch_funding_mark,
                     candle_fetch=fetch_1m_candles,
@@ -477,13 +510,7 @@ def main(argv: list[str] | None = None) -> int:
                 }
 
             report["portfolio"] = trade_report(db_path)
-            gate = rebalance_gate(db_path, run_started_ms)
-            exchange_ms = report.get("as_of_server_time_ms") or report.get("api", {}).get("server_time_ms")
-            gate["exchange_time_ms"] = exchange_ms
-            if gate.get("can_rebalance") and gate.get("eligible_after_ms") is not None:
-                if not isinstance(exchange_ms, int) or exchange_ms < int(gate["eligible_after_ms"]):
-                    gate["can_rebalance"] = False
-                    gate["reason"] = "EXCHANGE_CLOCK_BEFORE_ELIGIBILITY"
+            gate["exchange_time_ms"] = report.get("as_of_server_time_ms") or report.get("api", {}).get("server_time_ms")
             report["rebalance_gate"] = gate
 
             if gate.get("can_rebalance") and ranking_pass:

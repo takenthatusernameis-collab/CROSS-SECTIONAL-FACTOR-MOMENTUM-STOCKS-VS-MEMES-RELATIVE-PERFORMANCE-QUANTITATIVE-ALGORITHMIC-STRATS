@@ -6,7 +6,7 @@ from pathlib import Path
 
 from bitget_stocks_vs_crypto.market import classify_instruments
 from bitget_stocks_vs_crypto.portfolio import (
-    PaperError, parse_book, run_snapshot, size_for_target_notional, trade_report,
+    PaperError, parse_book, rebalance_gate, run_snapshot, size_for_target_notional, trade_report,
 )
 
 
@@ -99,8 +99,62 @@ class PaperLedgerTests(unittest.TestCase):
                 funding_fetch=lambda symbol, start, end: [],
                 funding_mark_fetch=lambda symbol, timestamp: D("100"),
                 initial_nav=D("10000"))
-            self.assertEqual(repeated["status"], "ALREADY_PROCESSED")
+            self.assertEqual(repeated["status"], "COOLDOWN_ACTIVE")
             self.assertEqual(len(trade_report(db_path)["open_trades"]), 2)
+
+    def test_cooldown_is_binary_and_resets_on_first_run_after_scheduled_minute(self):
+        run_started = 1_800_000_000_123
+        as_of = run_started + 20_000
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "paper.sqlite3"
+            book_map = books(as_of)
+            result = run_snapshot(ranking(as_of), db_path,
+                depth_fetch=lambda symbol: book_map[symbol],
+                funding_fetch=lambda symbol, start, end: [],
+                funding_mark_fetch=lambda symbol, timestamp: D("100"),
+                initial_nav=D("10000"), run_started_ms=run_started)
+            self.assertEqual(result["status"], "UPDATED")
+            expected_reset = (run_started // 60_000) * 60_000 + 86_400_000 + 60_000
+            with __import__("sqlite3").connect(db_path) as db:
+                value, activated, reset = db.execute(
+                    "SELECT cooldown,activated_at_ms,reset_at_ms FROM cooldown_control WHERE id=1"
+                ).fetchone()
+            self.assertEqual(value, 1)
+            self.assertEqual(activated, run_started)
+            self.assertEqual(reset, expected_reset)
+
+            before = rebalance_gate(db_path, expected_reset - 1)
+            self.assertEqual(before["cooldown"], 1)
+            self.assertFalse(before["can_rebalance"])
+            after_start = expected_reset + 5 * 60_000
+            after = rebalance_gate(db_path, after_start)
+            self.assertEqual(after["cooldown"], 0)
+            self.assertTrue(after["can_rebalance"])
+            self.assertEqual(after["last_reset_run_started_ms"], after_start)
+
+            # Simulate a failed ranking/depth attempt on the first eligible run.
+            # A later retry must not move the already-fixed measurement boundary.
+            retry_start = after_start + 5 * 60_000
+            retry_gate = rebalance_gate(db_path, retry_start)
+            self.assertEqual(retry_gate["cooldown"], 0)
+            self.assertEqual(retry_gate["last_reset_run_started_ms"], after_start)
+
+            with __import__("sqlite3").connect(db_path) as db:
+                self.assertEqual(db.execute(
+                    "SELECT cooldown FROM cooldown_control WHERE id=1"
+                ).fetchone()[0], 0)
+
+            next_books = books(retry_start)
+            next_result = run_snapshot(ranking(retry_start), db_path,
+                depth_fetch=lambda symbol: next_books[symbol],
+                funding_fetch=lambda symbol, start, end: [],
+                funding_mark_fetch=lambda symbol, timestamp: D("100"),
+                initial_nav=D("10000"), run_started_ms=retry_start)
+            self.assertEqual(next_result["status"], "UPDATED")
+            self.assertEqual(next_result["cooldown"]["value"], 1)
+            self.assertEqual(next_result["cooldown"]["activated_at_ms"], retry_start)
+            self.assertEqual(next_result["closed_period_performance"]["period_end_ms"], after_start)
+            self.assertEqual(next_result["closed_period_performance"]["rebalance_delay_ms"], 5 * 60_000)
 
     def test_second_snapshot_closes_trades_and_tracks_fee_funding_adjusted_roi(self):
         day1 = 1_800_000_000_000

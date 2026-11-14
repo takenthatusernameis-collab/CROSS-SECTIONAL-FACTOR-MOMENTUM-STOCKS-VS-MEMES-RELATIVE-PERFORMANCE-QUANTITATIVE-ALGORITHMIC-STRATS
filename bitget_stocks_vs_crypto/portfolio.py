@@ -41,33 +41,69 @@ MINUTE_MS = 60 * 1000
 
 
 def cooldown_close_ms(entry_time_ms: int) -> int:
-    """Close after the first full 1m candle whose start is not before entry+24h."""
+    """Legacy conversion used only when migrating pre-binary-lock databases."""
     expiry = int(entry_time_ms) + HOLD_DURATION_MS
     first_full_minute_start = ((expiry + MINUTE_MS - 1) // MINUTE_MS) * MINUTE_MS
     return first_full_minute_start + MINUTE_MS
 
 
+def cooldown_reset_ms(run_started_ms: int) -> int:
+    """Reset after the minute at +24h from the activation minute has passed."""
+    activation_minute = (int(run_started_ms) // MINUTE_MS) * MINUTE_MS
+    return activation_minute + HOLD_DURATION_MS + MINUTE_MS
+
+
 def rebalance_gate(db_path: str | Path, run_started_ms: int) -> dict[str, Any]:
-    """Return a persistent 24h position-lock decision based on actual entry times."""
+    """Read/update the persistent binary cooldown using the actual run-start time."""
     path = Path(db_path)
+    started = int(run_started_ms)
     if not path.exists():
-        return {"can_rebalance": True, "reason": "NO_PAPER_DATABASE", "eligible_after_ms": None}
-    db = sqlite3.connect(str(path))
+        return {"can_rebalance": True, "cooldown": 0, "reason": "COOLDOWN_ZERO_NO_DATABASE",
+                "eligible_after_ms": None, "run_started_ms": started}
+
+    db = sqlite3.connect(str(path), timeout=30, isolation_level=None)
+    db.row_factory = sqlite3.Row
     try:
-        rows = db.execute("""SELECT p.leg,p.trade_id,t.entry_time_ms FROM positions p
-            JOIN trades t ON t.trade_id=p.trade_id ORDER BY p.leg""").fetchall()
-        if not rows:
-            return {"can_rebalance": True, "reason": "NO_OPEN_POSITIONS", "eligible_after_ms": None}
-        if {row[0] for row in rows} != {"LONG", "SHORT"} or len(rows) != 2:
-            return {"can_rebalance": False, "reason": "INCOMPLETE_POSITION_PAIR", "eligible_after_ms": None}
-        latest_entry = max(int(row[2]) for row in rows)
-        eligible_after = cooldown_close_ms(latest_entry)
-        started = int(run_started_ms)
-        return {"can_rebalance": started >= eligible_after,
-                "reason": "COOLDOWN_COMPLETE" if started >= eligible_after else "24H_COOLDOWN_ACTIVE",
-                "latest_entry_time_ms": latest_entry, "eligible_after_ms": eligible_after,
-                "run_started_ms": started,
-                "seconds_remaining": max(0, (eligible_after-started)/1000)}
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("""CREATE TABLE IF NOT EXISTS cooldown_control(
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            cooldown INTEGER NOT NULL DEFAULT 0 CHECK(cooldown IN (0,1)),
+            activated_at_ms INTEGER, reset_at_ms INTEGER,
+            last_reset_run_started_ms INTEGER)""")
+        state = db.execute("SELECT * FROM cooldown_control WHERE id=1").fetchone()
+        if state is None:
+            tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            legacy = db.execute("SELECT cycle_start_ms,eligible_after_ms FROM monitor_state WHERE id=1").fetchone() if "monitor_state" in tables else None
+            open_count = int(db.execute("SELECT COUNT(*) FROM positions").fetchone()[0]) if "positions" in tables else 0
+            if legacy is not None and open_count == 2:
+                activated = int(legacy["cycle_start_ms"])
+                reset_at = int(legacy["eligible_after_ms"] or cooldown_reset_ms(activated))
+                db.execute("INSERT INTO cooldown_control(id,cooldown,activated_at_ms,reset_at_ms) VALUES(1,1,?,?)",
+                           (activated, reset_at))
+            else:
+                db.execute("INSERT INTO cooldown_control(id,cooldown) VALUES(1,0)")
+            state = db.execute("SELECT * FROM cooldown_control WHERE id=1").fetchone()
+        reset_at = int(state["reset_at_ms"]) if state["reset_at_ms"] is not None else None
+        if int(state["cooldown"]) == 1 and reset_at is not None and started >= reset_at:
+            db.execute("""UPDATE cooldown_control SET cooldown=0,
+                last_reset_run_started_ms=? WHERE id=1""", (started,))
+            state = db.execute("SELECT * FROM cooldown_control WHERE id=1").fetchone()
+        value = int(state["cooldown"])
+        db.execute("COMMIT")
+        return {
+            "can_rebalance": value == 0, "cooldown": value,
+            "reason": "COOLDOWN_ZERO_READY" if value == 0 else "COOLDOWN_ONE_ACTIVE",
+            "activated_at_ms": state["activated_at_ms"],
+            "eligible_after_ms": state["reset_at_ms"],
+            "last_reset_run_started_ms": state["last_reset_run_started_ms"],
+            "run_started_ms": started,
+            "seconds_remaining": max(0, (int(state["reset_at_ms"]) - started) / 1000)
+                if state["reset_at_ms"] is not None and value == 1 else 0,
+        }
+    except Exception:
+        if db.in_transaction:
+            db.execute("ROLLBACK")
+        raise
     finally:
         db.close()
 
@@ -140,7 +176,7 @@ def init_db(path: str | Path, initial_nav: Decimal) -> sqlite3.Connection:
         snapshot_date TEXT PRIMARY KEY, period_start_ms INTEGER, period_end_ms INTEGER NOT NULL,
         long_symbol TEXT, short_symbol TEXT, expected_minutes INTEGER NOT NULL DEFAULT 0,
         matched_minutes INTEGER NOT NULL DEFAULT 0, coverage_pct TEXT NOT NULL DEFAULT '0',
-        status TEXT NOT NULL, error TEXT,
+        status TEXT NOT NULL, error TEXT, period_roi_pct TEXT,
         spread_open_ratio TEXT, spread_high_ratio TEXT, spread_low_ratio TEXT,
         spread_close_ratio TEXT, spread_drawdown_pct TEXT,
         nav_start TEXT, nav_min_intraday TEXT, nav_min_time_ms INTEGER,
@@ -182,7 +218,7 @@ def init_db(path: str | Path, initial_nav: Decimal) -> sqlite3.Connection:
         eligible_after_ms INTEGER NOT NULL, status TEXT NOT NULL,
         nav_usdt TEXT NOT NULL, cash_usdt TEXT NOT NULL,
         unrealized_pnl_usdt TEXT NOT NULL, funding_pending_usdt TEXT NOT NULL,
-        gross_exposure_usdt TEXT NOT NULL, portfolio_roi_pct TEXT NOT NULL,
+        gross_exposure_usdt TEXT NOT NULL, portfolio_roi_pct TEXT NOT NULL, cycle_roi_pct TEXT NOT NULL,
         long_symbol TEXT NOT NULL, long_mark_price TEXT NOT NULL,
         long_unrealized_pnl_usdt TEXT NOT NULL, long_trade_roi_pct TEXT NOT NULL,
         short_symbol TEXT NOT NULL, short_mark_price TEXT NOT NULL,
@@ -194,13 +230,36 @@ def init_db(path: str | Path, initial_nav: Decimal) -> sqlite3.Connection:
         matched_minutes INTEGER NOT NULL, coverage_pct TEXT NOT NULL,
         seconds_to_rebalance INTEGER NOT NULL, last_error TEXT);
       CREATE INDEX IF NOT EXISTS monitor_observations_cycle_idx ON monitor_observations(cycle_start_ms,observed_at_ms);
+      CREATE TABLE IF NOT EXISTS cooldown_control(
+        id INTEGER PRIMARY KEY CHECK(id=1),
+        cooldown INTEGER NOT NULL DEFAULT 0 CHECK(cooldown IN (0,1)),
+        activated_at_ms INTEGER, reset_at_ms INTEGER,
+        last_reset_run_started_ms INTEGER);
     """)
+    risk_columns = {r[1] for r in db.execute("PRAGMA table_info(risk_intervals)")}
+    if "period_roi_pct" not in risk_columns:
+        db.execute("ALTER TABLE risk_intervals ADD COLUMN period_roi_pct TEXT")
+    monitor_columns = {r[1] for r in db.execute("PRAGMA table_info(monitor_observations)")}
+    if "cycle_roi_pct" not in monitor_columns:
+        db.execute("ALTER TABLE monitor_observations ADD COLUMN cycle_roi_pct TEXT NOT NULL DEFAULT '0'")
     account = db.execute("SELECT * FROM account WHERE id=1").fetchone()
     if account is None:
         db.execute("INSERT INTO account(id,initial_nav,cash) VALUES(1,?,?)", (fmt(initial_nav), fmt(initial_nav)))
     elif dec(account["initial_nav"], "stored initial NAV", positive=True) != initial_nav:
         db.close()
         raise PaperError("Initial NAV is immutable after the paper database is initialized")
+
+    cooldown_row = db.execute("SELECT * FROM cooldown_control WHERE id=1").fetchone()
+    if cooldown_row is None:
+        legacy = db.execute("SELECT cycle_start_ms,eligible_after_ms FROM monitor_state WHERE id=1").fetchone()
+        open_count = int(db.execute("SELECT COUNT(*) FROM positions").fetchone()[0])
+        if legacy is not None and open_count == 2:
+            activated = int(legacy["cycle_start_ms"])
+            reset_at = int(legacy["eligible_after_ms"] or cooldown_reset_ms(activated))
+            db.execute("""INSERT INTO cooldown_control(id,cooldown,activated_at_ms,reset_at_ms)
+                          VALUES(1,1,?,?)""", (activated, reset_at))
+        else:
+            db.execute("INSERT INTO cooldown_control(id,cooldown) VALUES(1,0)")
     return db
 
 
@@ -340,38 +399,46 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
             raise PaperError("Fee override must be in [0,1)")
 
     db = init_db(db_path, initial_nav)
+    started_ms = int(run_started_ms) if run_started_ms is not None else as_of
     try:
-        if db.execute("SELECT 1 FROM daily_snapshots WHERE snapshot_date=?", (date,)).fetchone():
-            return {"status": "ALREADY_PROCESSED", "updated": False, "snapshot_date": date,
-                    "message": "A paper snapshot already exists for this UTC date; no duplicate trades were created."}
+        cooldown_row = db.execute("SELECT * FROM cooldown_control WHERE id=1").fetchone()
+        cooldown_value = int(cooldown_row["cooldown"]) if cooldown_row else 0
+        reset_at = int(cooldown_row["reset_at_ms"]) if cooldown_row and cooldown_row["reset_at_ms"] is not None else None
+        if cooldown_value == 1 and reset_at is not None and started_ms >= reset_at:
+            db.execute("UPDATE cooldown_control SET cooldown=0,last_reset_run_started_ms=? WHERE id=1",
+                       (started_ms,))
+            cooldown_value = 0
+        if cooldown_value == 1:
+            return {"status":"COOLDOWN_ACTIVE","updated":False,"cooldown":1,
+                    "eligible_after_ms":reset_at,"run_started_ms":started_ms,
+                    "seconds_remaining":max(0,(reset_at-started_ms)/1000) if reset_at else None,
+                    "message":"The persisted binary cooldown remains 1 until its scheduled reset minute has passed."}
 
         old_positions = {r["leg"]: dict(r) for r in db.execute("SELECT * FROM positions")}
-        if old_positions:
-            if set(old_positions) != {"LONG", "SHORT"}:
-                raise PaperError("Existing paper state does not contain exactly one LONG and one SHORT position")
-            entry_rows = db.execute("""SELECT t.entry_time_ms FROM positions p
-                JOIN trades t ON t.trade_id=p.trade_id""").fetchall()
-            eligible_after = cooldown_close_ms(max(int(r[0]) for r in entry_rows))
-            started_ms = int(run_started_ms) if run_started_ms is not None else as_of
-            if started_ms < eligible_after or as_of < eligible_after:
-                return {"status":"COOLDOWN_ACTIVE","updated":False,
-                        "eligible_after_ms":eligible_after,"run_started_ms":started_ms,
-                        "seconds_remaining":max(0,(eligible_after-started_ms)/1000),
-                        "message":"The 24-hour position lock remains active until the first complete one-minute candle after expiry has closed."}
+        if old_positions and set(old_positions) != {"LONG", "SHORT"}:
+            raise PaperError("Existing paper state does not contain exactly one LONG and one SHORT position")
+        performance_end_ms = (
+            int(cooldown_row["last_reset_run_started_ms"])
+            if old_positions and cooldown_row and cooldown_row["last_reset_run_started_ms"] is not None
+            else started_ms
+        )
         monitor_state_row = db.execute("SELECT * FROM monitor_state WHERE id=1").fetchone()
-        monitor_cycle_valid = bool(
+        monitor_cycle_matches = bool(
             monitor_state_row is not None and set(old_positions) == {"LONG", "SHORT"}
             and int(monitor_state_row["long_trade_id"]) == int(old_positions["LONG"]["trade_id"])
             and int(monitor_state_row["short_trade_id"]) == int(old_positions["SHORT"]["trade_id"])
-            and monitor_state_row["last_processed_minute_ms"] is not None
         )
+        monitor_cycle_valid = bool(monitor_cycle_matches and monitor_state_row["last_processed_minute_ms"] is not None)
         prior_snapshot_for_risk = db.execute(
             "SELECT snapshot_date,as_of_ms,nav FROM daily_snapshots ORDER BY snapshot_date DESC LIMIT 1"
         ).fetchone()
         risk_market_candles: dict[str, list[dict[str, Any]]] = {}
         risk_mark_candles: dict[str, list[dict[str, Any]]] = {}
         risk_fetch_error: str | None = None
-        risk_period_start_ms = int(prior_snapshot_for_risk["as_of_ms"]) if prior_snapshot_for_risk else None
+        risk_period_start_ms = (
+            int(monitor_state_row["cycle_start_ms"]) if monitor_cycle_matches
+            else (int(prior_snapshot_for_risk["as_of_ms"]) if prior_snapshot_for_risk else None)
+        )
         markets = {m.get("symbol"): m for m in report.get("market_results", []) if isinstance(m, dict)}
         for symbol, expected in ((long_symbol, "stock"), (short_symbol, "crypto")):
             market = markets.get(symbol)
@@ -414,8 +481,8 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
             else:
                 try:
                     for symbol in sorted({p["symbol"] for p in old_positions.values()}):
-                        risk_market_candles[symbol] = candle_fetch(symbol, risk_period_start_ms, as_of, "market")
-                        risk_mark_candles[symbol] = candle_fetch(symbol, risk_period_start_ms, as_of, "mark")
+                        risk_market_candles[symbol] = candle_fetch(symbol, risk_period_start_ms, performance_end_ms, "market")
+                        risk_mark_candles[symbol] = candle_fetch(symbol, risk_period_start_ms, performance_end_ms, "mark")
                 except Exception as exc:
                     risk_fetch_error = f"{type(exc).__name__}: {str(exc)[:800]}"
                     risk_market_candles.clear()
@@ -431,6 +498,13 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
         short_fee = fee_rate_for(short_market, fee_override)
 
         db.execute("BEGIN IMMEDIATE")
+        control_tx = db.execute("SELECT cooldown,reset_at_ms FROM cooldown_control WHERE id=1").fetchone()
+        if control_tx is None or int(control_tx["cooldown"]) != 0:
+            db.execute("ROLLBACK")
+            return {"status":"COOLDOWN_ACTIVE","updated":False,"cooldown":1,
+                    "eligible_after_ms":control_tx["reset_at_ms"] if control_tx else None,
+                    "run_started_ms":started_ms,
+                    "message":"The binary cooldown changed before the accounting transaction; no portfolio changes were made."}
         account = db.execute("SELECT * FROM account WHERE id=1").fetchone()
         cash = dec(account["cash"], "account cash")
         realized = dec(account["realized_gross_pnl"], "realized P&L")
@@ -445,7 +519,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
         risk_state_row = db.execute("SELECT * FROM strategy_risk WHERE id=1").fetchone()
         if risk_state_row is None:
             seed_peak = max(initial_nav, previous_nav) if previous_nav is not None else initial_nav
-            seed_time = int(previous["as_of_ms"]) if previous else as_of
+            seed_time = started_ms
             db.execute("""INSERT INTO strategy_risk(id,peak_nav,peak_time_ms,max_drawdown_pct)
                           VALUES(?,?,?,'0')""", (1, fmt(seed_peak), seed_time))
             risk_state_row = db.execute("SELECT * FROM strategy_risk WHERE id=1").fetchone()
@@ -479,7 +553,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
             try:
                 # Recompute the full interval expected count at finalization so a
                 # failed last five-minute job cannot make stale coverage look complete.
-                monitor_expected = len(expected_minute_starts(monitor_start, as_of))
+                monitor_expected = len(expected_minute_starts(monitor_start, performance_end_ms))
             except Exception as exc:
                 monitor_expected = int(monitor_state_tx["expected_minutes"]) + 1
                 risk_error = f"Final interval exceeds minute-risk limit: {type(exc).__name__}: {str(exc)[:300]}"
@@ -499,7 +573,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
                 (int(monitor_state_tx["cycle_start_ms"]),)).fetchall()
             risk_analysis = {
                 "status":risk_status,"period_start_ms":monitor_start,
-                "period_end_ms":as_of,"expected_minutes":monitor_expected,"matched_minutes":monitor_matched,
+                "period_end_ms":performance_end_ms,"expected_minutes":monitor_expected,"matched_minutes":monitor_matched,
                 "coverage_pct":fmt(monitor_coverage),"spread_open_ratio":monitor_state_tx["spread_open_ratio"],
                 "spread_high_ratio":monitor_state_tx["spread_high_ratio"],
                 "spread_low_ratio":monitor_state_tx["spread_low_ratio"],
@@ -519,7 +593,7 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
         elif old_positions and set(old_positions) == {"LONG", "SHORT"} and previous is not None and not risk_fetch_error:
             try:
                 risk_analysis = analyse_intraday_risk(
-                    start_ms=int(previous["as_of_ms"]), end_ms=as_of,
+                    start_ms=int(risk_period_start_ms), end_ms=performance_end_ms,
                     long_position=old_positions["LONG"], short_position=old_positions["SHORT"],
                     starting_cash=starting_cash, previous_nav=previous_nav,
                     funding_cashflows=funding_cashflows,
@@ -683,24 +757,31 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
         held_long = old_positions.get("LONG", {}).get("symbol")
         held_short = old_positions.get("SHORT", {}).get("symbol")
         analysis = risk_analysis or {}
+        period_roi_pct = (
+            fmt((dec(analysis["nav_close"], "period closing NAV", positive=True) /
+                 dec(analysis["nav_start"], "period starting NAV", positive=True) - D("1")) * D("100"))
+            if risk_status == "COMPLETE" and analysis.get("nav_close") is not None
+            and analysis.get("nav_start") is not None else None
+        )
+        period_mdd_pct = analysis.get("daily_mdd_pct") if risk_status == "COMPLETE" else None
         db.execute("""INSERT INTO risk_intervals(
             snapshot_date,period_start_ms,period_end_ms,long_symbol,short_symbol,
-            expected_minutes,matched_minutes,coverage_pct,status,error,
+            expected_minutes,matched_minutes,coverage_pct,status,error,period_roi_pct,
             spread_open_ratio,spread_high_ratio,spread_low_ratio,spread_close_ratio,spread_drawdown_pct,
             nav_start,nav_min_intraday,nav_min_time_ms,nav_close_intraday,nav_after_rebalance,
             daily_mdd_pct,strategy_mdd_pct,strategy_peak_nav,strategy_mdd_peak_nav,
             strategy_mdd_trough_nav,strategy_mdd_peak_time_ms,strategy_mdd_trough_time_ms)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (date, int(previous["as_of_ms"]) if previous else None, as_of,
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (date, int(risk_period_start_ms) if risk_period_start_ms is not None else None, performance_end_ms,
              held_long, held_short, int(analysis.get("expected_minutes", 0)),
              int(analysis.get("matched_minutes", 0)), str(analysis.get("coverage_pct", "0")),
-             risk_status, risk_error,
+             risk_status, risk_error, period_roi_pct,
              analysis.get("spread_open_ratio"), analysis.get("spread_high_ratio"),
              analysis.get("spread_low_ratio"), analysis.get("spread_close_ratio"),
              analysis.get("spread_drawdown_pct"),
              analysis.get("nav_start", fmt(previous_nav) if previous_nav is not None else fmt(initial_nav)),
              analysis.get("nav_low"), analysis.get("nav_low_time_ms"), analysis.get("nav_close"),
-             fmt(nav), fmt(daily_mdd_pct), fmt(mdd_pct), fmt(peak_nav),
+             fmt(nav), period_mdd_pct, fmt(mdd_pct), fmt(peak_nav),
              fmt(mdd_peak_nav) if mdd_peak_nav is not None else None,
              fmt(mdd_trough_nav) if mdd_trough_nav is not None else None,
              mdd_peak_time_ms, mdd_trough_time_ms))
@@ -729,8 +810,9 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
         db.execute("UPDATE account SET cash=?,realized_gross_pnl=?,fees_cumulative=?,funding_cumulative=? WHERE id=1",
                    (fmt(cash),fmt(realized),fmt(fees),fmt(funding_total)))
 
-        # Start a new persistent 24h holding cycle. Monitoring is analytics-only
-        # until the first complete 1m candle after this timestamp's 24h expiry.
+        # Arm the binary lock on successful construction, using this workflow run's
+        # start minute as the performance-window and cooldown activation boundary.
+        reset_at_ms = cooldown_reset_ms(started_ms)
         new_cycle_spread = new_positions["LONG"]["entry_price"] / new_positions["SHORT"]["entry_price"]
         db.execute("""INSERT OR REPLACE INTO monitor_state(
             id,cycle_start_ms,eligible_after_ms,long_trade_id,short_trade_id,
@@ -739,15 +821,32 @@ def run_snapshot(report: dict[str, Any], db_path: str | Path, *,
             nav_low_intraday,nav_low_time_ms,daily_peak_nav,daily_mdd_pct,
             expected_minutes,matched_minutes,status,last_error)
             VALUES(1,?,?,?,?,NULL,?,?,?,?,?,?,?,?,NULL,NULL,?,'0',0,0,'WAITING',NULL)""",
-            (as_of,cooldown_close_ms(as_of),new_positions["LONG"]["trade_id"],
-             new_positions["SHORT"]["trade_id"],as_of,fmt(nav),fmt(nav),"0",
+            (started_ms,reset_at_ms,new_positions["LONG"]["trade_id"],
+             new_positions["SHORT"]["trade_id"],started_ms,fmt(nav),fmt(nav),"0",
              fmt(new_cycle_spread),fmt(new_cycle_spread),fmt(new_cycle_spread),
              fmt(new_cycle_spread),fmt(nav)))
+        db.execute("""UPDATE cooldown_control SET cooldown=1,activated_at_ms=?,
+            reset_at_ms=?,last_reset_run_started_ms=NULL WHERE id=1""",
+            (started_ms,reset_at_ms))
         db.execute("COMMIT")
 
         closed_trades = [dict(r) for r in db.execute(
             "SELECT trade_id,leg,symbol,entry_date,exit_date,entry_notional,gross_pnl,entry_fee,exit_fee,funding_pnl,net_pnl,trade_roi_pct FROM trades WHERE status='CLOSED' AND exit_date=? ORDER BY trade_id", (date,))]
         return {"status":"UPDATED","updated":True,"snapshot_date":date,
+            "cooldown":{"value":1,"activated_at_ms":started_ms,"reset_at_ms":reset_at_ms},
+            "closed_period_performance":{
+                "period_start_ms":risk_period_start_ms if old_positions else None,
+                "period_end_ms":performance_end_ms if old_positions else None,
+                "rebalance_delay_ms":max(0,started_ms-performance_end_ms) if old_positions else None,
+                "duration_ms":(performance_end_ms-int(risk_period_start_ms))
+                    if old_positions and risk_period_start_ms is not None else None,
+                "period_roi_pct":period_roi_pct,
+                "period_mdd_pct":period_mdd_pct,
+                "duration_ms":(performance_end_ms - int(risk_analysis["period_start_ms"]))
+                    if risk_analysis and risk_analysis.get("period_start_ms") is not None else None,
+                "coverage_pct":analysis.get("coverage_pct","0"),
+                "status":risk_status,
+            },
             "snapshot":{"nav_usdt":fmt(nav),"cash_usdt":fmt(cash),"unrealized_pnl_usdt":fmt(unrealized),
                 "daily_return_pct":fmt(daily_return) if daily_return is not None else None,
                 "hours_since_previous_snapshot":round(hours_since,3) if hours_since is not None else None,
@@ -804,6 +903,7 @@ def trade_report(db_path: str | Path) -> dict[str, Any]:
         interval_dict = dict(latest_interval) if latest_interval else None
         latest_monitor_row = db.execute("SELECT * FROM monitor_observations ORDER BY observed_at_ms DESC LIMIT 1").fetchone() if "monitor_observations" in tables else None
         monitor_state = db.execute("SELECT * FROM monitor_state WHERE id=1").fetchone() if "monitor_state" in tables else None
+        cooldown_state = db.execute("SELECT * FROM cooldown_control WHERE id=1").fetchone() if "cooldown_control" in tables else None
         if monitor_state and int(monitor_state["expected_minutes"]) > 0:
             risk_quality = ("COMPLETE_CURRENT_CYCLE"
                             if monitor_state["status"] == "MONITORING"
@@ -819,6 +919,7 @@ def trade_report(db_path: str | Path) -> dict[str, Any]:
             "portfolio_total_roi_pct":snap_dict.get("total_return_pct") if snap_dict else None,
             "latest_monitor":dict(latest_monitor_row) if latest_monitor_row else None,
             "rebalance_lock":dict(monitor_state) if monitor_state else None,
+            "cooldown_control":dict(cooldown_state) if cooldown_state else {"cooldown":0},
             "risk":{"quality_status":risk_quality,"strategy":risk_dict,
                     "latest_interval":interval_dict,"recent_intervals":[dict(x) for x in recent_intervals]}}
     finally:

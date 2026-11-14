@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .portfolio import (
-    PaperError, cooldown_close_ms, dec, fmt, init_db, utc_iso,
+    PaperError, cooldown_close_ms, cooldown_reset_ms, dec, fmt, init_db, utc_iso,
 )
 from .risk import analyse_intraday_risk, expected_minute_starts
 
@@ -38,9 +38,10 @@ def _ensure_cycle(db: sqlite3.Connection, positions: dict[str, dict[str, Any]],
     if valid:
         return state
 
+    control = db.execute("SELECT activated_at_ms,reset_at_ms FROM cooldown_control WHERE id=1").fetchone()
     entries = [int(long_pos["entry_time_ms"]), int(short_pos["entry_time_ms"])]
-    cycle_start = max(entries)
-    eligible_after = cooldown_close_ms(cycle_start)
+    cycle_start = int(control["activated_at_ms"]) if control and control["activated_at_ms"] is not None else max(entries)
+    eligible_after = int(control["reset_at_ms"]) if control and control["reset_at_ms"] is not None else cooldown_reset_ms(cycle_start)
     snapshot = db.execute(
         "SELECT as_of_ms,nav FROM daily_snapshots ORDER BY as_of_ms DESC LIMIT 1"
     ).fetchone()
@@ -73,9 +74,13 @@ def monitor_open_positions(
     funding_fetch: Callable[[str, int, int], list[dict[str, Any]]],
     funding_mark_fetch: Callable[[str, int], Decimal],
     candle_fetch: Callable[[str, int, int, str], list[dict[str, Any]]],
+    metrics_end_ms: int | None = None,
 ) -> dict[str, Any]:
-    """Mark open legs and incrementally process closed 1m bars without rebalancing."""
+    """Mark open legs and process bars only through the workflow-start boundary."""
     initial_nav = dec(initial_nav, "initial NAV", positive=True)
+    metrics_end = int(metrics_end_ms) if metrics_end_ms is not None else int(now_ms)
+    if metrics_end > int(now_ms):
+        raise PaperError("Risk-window end cannot be later than the live monitoring timestamp")
     db = init_db(db_path, initial_nav)
     try:
         positions_rows = db.execute("""SELECT p.*,t.entry_time_ms,t.entry_notional,
@@ -168,7 +173,7 @@ def monitor_open_positions(
         cycle_start = int(state_before["cycle_start_ms"])
         previous_processed = state_before["last_processed_minute_ms"]
         segment_start = cycle_start if previous_processed is None else int(previous_processed) + MINUTE_MS
-        segment_end = (int(now_ms) // MINUTE_MS) * MINUTE_MS
+        segment_end = (metrics_end // MINUTE_MS) * MINUTE_MS
         analysis: dict[str, Any] | None = None
         risk_error: str | None = None
         if segment_end > segment_start:
@@ -294,12 +299,17 @@ def monitor_open_positions(
 
         spread_drawdown = (spread_low / spread_high - D("1")) * D("100")
         seconds_to_rebalance = max(0, int((int(latest_state["eligible_after_ms"]) - int(now_ms) + 999) // 1000))
+        checkpoint_nav = dec(state_before["nav_last"], "last contiguous minute NAV", positive=True)
+        if complete_segment and analysis and analysis.get("nav_close") is not None:
+            checkpoint_nav = dec(analysis["nav_close"], "contiguous segment closing NAV", positive=True)
+        cycle_nav_start = dec(state_before["nav_start"], "workflow-cycle starting NAV", positive=True)
+        cycle_roi_pct = (nav_now / cycle_nav_start - D("1")) * D("100")
         db.execute("""UPDATE monitor_state SET
             last_processed_minute_ms=?,last_observed_at_ms=?,nav_last=?,funding_accrued=?,
             spread_high_ratio=?,spread_low_ratio=?,spread_close_ratio=?,nav_low_intraday=?,
             nav_low_time_ms=?,daily_peak_nav=?,daily_mdd_pct=?,expected_minutes=?,
             matched_minutes=?,status=?,last_error=? WHERE id=1""",
-            (last_processed,int(now_ms),fmt(nav_now),fmt(funding_total),fmt(spread_high),fmt(spread_low),
+            (last_processed,int(now_ms),fmt(checkpoint_nav),fmt(funding_total),fmt(spread_high),fmt(spread_low),
              fmt(spread_mark if analysis is None else spread_close),
              fmt(nav_low) if nav_low is not None else None,nav_low_time,fmt(daily_peak),fmt(daily_mdd),
              expected_total,matched_total,status,risk_error))
@@ -307,16 +317,16 @@ def monitor_open_positions(
         long_pos, short_pos = positions["LONG"], positions["SHORT"]
         db.execute("""INSERT OR REPLACE INTO monitor_observations(
             observed_at_ms,cycle_start_ms,eligible_after_ms,status,nav_usdt,cash_usdt,
-            unrealized_pnl_usdt,funding_pending_usdt,gross_exposure_usdt,portfolio_roi_pct,
+            unrealized_pnl_usdt,funding_pending_usdt,gross_exposure_usdt,portfolio_roi_pct,cycle_roi_pct,
             long_symbol,long_mark_price,long_unrealized_pnl_usdt,long_trade_roi_pct,
             short_symbol,short_mark_price,short_unrealized_pnl_usdt,short_trade_roi_pct,
             spread_ratio_mark,spread_open_ratio,spread_high_ratio,spread_low_ratio,
             spread_drawdown_pct,daily_mdd_pct,strategy_mdd_pct,expected_minutes,
             matched_minutes,coverage_pct,seconds_to_rebalance,last_error)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (int(now_ms),cycle_start,int(latest_state["eligible_after_ms"]),status,fmt(nav_now),
              fmt(cash_now),fmt(unrealized_total),fmt(funding_total),fmt(gross_exposure),fmt(portfolio_roi),
-             long_pos["symbol"],fmt(mark_long),fmt(unrealized_by_leg["LONG"]),fmt(roi_by_leg["LONG"]),
+             fmt(cycle_roi_pct),long_pos["symbol"],fmt(mark_long),fmt(unrealized_by_leg["LONG"]),fmt(roi_by_leg["LONG"]),
              short_pos["symbol"],fmt(mark_short),fmt(unrealized_by_leg["SHORT"]),fmt(roi_by_leg["SHORT"]),
              fmt(spread_mark),fmt(dec(latest_state["spread_open_ratio"],"spread open",positive=True)),
              fmt(spread_high),fmt(spread_low),fmt(spread_drawdown),fmt(daily_mdd),
@@ -326,9 +336,11 @@ def monitor_open_positions(
 
         return {
             "status": status, "updated": False, "analytics_updated": True,
-            "cycle_start_ms": cycle_start, "eligible_after_ms": int(latest_state["eligible_after_ms"]),
+            "cycle_start_ms": cycle_start, "period_end_ms": metrics_end,
+            "eligible_after_ms": int(latest_state["eligible_after_ms"]),
             "seconds_to_rebalance": seconds_to_rebalance,
             "nav_usdt": fmt(nav_now), "portfolio_roi_pct": fmt(portfolio_roi),
+            "cycle_roi_pct": fmt(cycle_roi_pct),
             "funding_pending_usdt": fmt(funding_total), "gross_exposure_usdt": fmt(gross_exposure),
             "open_positions": {
                 "LONG": {"symbol":long_pos["symbol"],"mark_price":fmt(mark_long),

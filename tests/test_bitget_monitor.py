@@ -134,16 +134,19 @@ class MonitoringIsolationTests(unittest.TestCase):
                 funding_fetch=lambda symbol,start,end:[],
                 funding_mark_fetch=lambda symbol,ts:D("100"),
                 candle_fetch=candle_fetch,
+                metrics_end_ms=entry + 3 * 60_000,
             )
             after = portfolio_state()
             self.assertEqual(result["status"], "MONITORING")
+            self.assertEqual(result["period_end_ms"], entry + 3 * 60_000)
+            self.assertIn("cycle_roi_pct", result)
             self.assertTrue(result["analytics_updated"])
             self.assertFalse(result["portfolio_state_changed"])
             self.assertEqual(set(result["open_positions"]), {"LONG","SHORT"})
             self.assertEqual(before, after, "monitoring must not mutate account/positions/trades/ledger/snapshots")
             with sqlite3.connect(db_path) as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM monitor_observations").fetchone()[0], 1)
-                self.assertEqual(db.execute("SELECT COUNT(*) FROM monitor_minute_metrics").fetchone()[0], 5)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM monitor_minute_metrics").fetchone()[0], 3)
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM daily_snapshots").fetchone()[0], 1)
             self.assertFalse(rebalance_gate(db_path, entry + 86_400_000)["can_rebalance"])
 

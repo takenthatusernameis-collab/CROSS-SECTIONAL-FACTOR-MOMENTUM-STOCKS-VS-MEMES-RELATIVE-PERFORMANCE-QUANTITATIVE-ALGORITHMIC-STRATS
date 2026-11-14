@@ -46,6 +46,12 @@ jobs:
       PAPER_OUTPUT: artifacts/bitget-paper-trading
       MODE: ${{ inputs.mode || 'scheduled' }}
     steps:
+      # Capture the job's actual start before checkout, setup, tests, or APIs.
+      # The Python runner uses this fixed timestamp for cooldown and risk windows.
+      - name: Capture workflow start timestamp
+        shell: bash
+        run: echo "PAPER_WORKFLOW_STARTED_MS=$(date +%s%3N)" >> "$GITHUB_ENV"
+
       - name: Check out main
         uses: actions/checkout@v4
         with:
@@ -83,7 +89,8 @@ jobs:
               if check != "ok": raise SystemExit(f"SQLite integrity failure: {check}")
               tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
               required={"account","trades","positions","ledger","daily_snapshots",
-                        "strategy_risk","risk_intervals","minute_metrics"}
+                        "strategy_risk","risk_intervals","minute_metrics","monitor_state",
+                        "monitor_minute_metrics","monitor_observations","cooldown_control"}
               missing=required-tables
               if missing: raise SystemExit(f"SQLite state missing tables: {sorted(missing)}")
               print("Restored and integrity-checked the durable Bitget paper/monitor state.")
