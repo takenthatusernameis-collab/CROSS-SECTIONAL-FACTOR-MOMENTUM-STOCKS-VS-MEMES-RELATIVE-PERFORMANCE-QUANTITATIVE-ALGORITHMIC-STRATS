@@ -1,0 +1,155 @@
+name: Bitget Stocks vs Crypto — Daily Paper Portfolio
+
+on:
+  schedule:
+    - cron: "5 0 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Diagnostic only, or explicitly run one paper rebalance now"
+        required: true
+        type: choice
+        default: diagnostic
+        options:
+          - diagnostic
+          - paper
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/bitget-stocks-vs-crypto-paper.yml"
+      - "bitget_stocks_vs_crypto/**"
+      - "scripts/run_bitget_paper.py"
+      - "tests/test_bitget_*.py"
+      - "README.md"
+      - "PROMPT.md"
+
+concurrency:
+  group: bitget-stocks-vs-crypto-paper
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bitget-paper:
+    name: Daily Bitget Stocks-vs-Crypto paper session
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: UTC
+      PYTHONUNBUFFERED: "1"
+      PAPER_INITIAL_NAV_USDT: ${{ vars.PAPER_INITIAL_NAV_USDT || '10000' }}
+      BITGET_TAKER_FEE_RATE: ${{ vars.BITGET_TAKER_FEE_RATE }}
+      PAPER_DB: state/bitget_paper.sqlite3
+      PAPER_OUTPUT: artifacts/bitget-paper-trading
+      MODE: ${{ inputs.mode || 'diagnostic' }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate unit tests
+        run: python -m unittest discover -s tests -p 'test_bitget_*.py' -v
+
+      - name: Compile source and tests
+        run: python -m compileall -q bitget_stocks_vs_crypto scripts/run_bitget_paper.py tests
+
+      - name: Restore durable SQLite paper ledger
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p state
+          STATE_BRANCH="bitget-paper-portfolio-state"
+          if git fetch --no-tags origin "+refs/heads/${STATE_BRANCH}:refs/remotes/origin/${STATE_BRANCH}"; then
+            if ! git show "refs/remotes/origin/${STATE_BRANCH}:state/bitget_paper.sqlite3" > "$PAPER_DB"; then
+              echo "ERROR: State branch exists but its SQLite database is missing; refusing to reset paper history." >&2
+              exit 1
+            fi
+            python - <<'PY'
+          import sqlite3
+          con=sqlite3.connect("state/bitget_paper.sqlite3")
+          try:
+              check=con.execute("PRAGMA integrity_check").fetchone()[0]
+              if check != "ok": raise SystemExit(f"SQLite integrity failure: {check}")
+              tables={r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+              required={"account","trades","positions","ledger","daily_snapshots"}
+              missing=required-tables
+              if missing: raise SystemExit(f"SQLite state missing tables: {sorted(missing)}")
+              print("Restored Bitget paper database and validated integrity.")
+          finally:
+              con.close()
+          PY
+          else
+            echo "No durable Bitget state branch yet; this is the initial paper-account bootstrap."
+          fi
+
+      - name: Run one scheduled paper rebalance (or selected manual paper run)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')
+        run: python scripts/run_bitget_paper.py --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
+
+      - name: Run read-only ranking diagnostic on pushes/manual diagnostic
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode != 'paper')
+        run: python scripts/run_bitget_paper.py --diagnostic-only --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
+
+      - name: Check SQLite integrity before persistence
+        if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) && success()
+        run: |
+          if [ -f "$PAPER_DB" ]; then
+            python - <<'PY'
+          import sqlite3
+          con=sqlite3.connect("state/bitget_paper.sqlite3")
+          try:
+              result=con.execute("PRAGMA integrity_check").fetchone()[0]
+              if result != "ok": raise SystemExit(result)
+              print("Paper database integrity: OK")
+          finally:
+              con.close()
+          PY
+          else
+            echo "Paper runner did not create a database." >&2
+            exit 1
+          fi
+
+      - name: Persist SQLite ledger to dedicated state branch
+        if: (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) && success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$PAPER_DB"
+          DB_COPY="$RUNNER_TEMP/bitget_paper.sqlite3"
+          cp "$PAPER_DB" "$DB_COPY"
+          STATE_BRANCH="bitget-paper-portfolio-state"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git fetch --no-tags origin "+refs/heads/${STATE_BRANCH}:refs/remotes/origin/${STATE_BRANCH}"; then
+            git checkout -B "$STATE_BRANCH" "refs/remotes/origin/${STATE_BRANCH}"
+          else
+            git checkout --orphan "$STATE_BRANCH"
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+          mkdir -p state
+          cp "$DB_COPY" state/bitget_paper.sqlite3
+          git add state/bitget_paper.sqlite3
+          if ! git diff --cached --quiet; then
+            git commit -m "Update Bitget Stocks-vs-Crypto paper ledger"
+          fi
+          git push origin "HEAD:refs/heads/${STATE_BRANCH}"
+
+      - name: Upload reports and a restorable database backup
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitget-stocks-vs-crypto-${{ github.run_id }}
+          path: |
+            artifacts/bitget-paper-trading/
+            state/bitget_paper.sqlite3
+          if-no-files-found: warn
+          retention-days: 90
