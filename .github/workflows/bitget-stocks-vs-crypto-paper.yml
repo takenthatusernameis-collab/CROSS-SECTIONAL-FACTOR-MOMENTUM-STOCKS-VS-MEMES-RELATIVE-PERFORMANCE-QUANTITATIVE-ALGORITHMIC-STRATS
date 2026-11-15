@@ -328,6 +328,68 @@ jobs:
           fi
           git push origin "HEAD:refs/heads/${STATE_BRANCH}"
 
+      # Mirror the exact durable-branch report to main for users who browse the default branch.
+      # Only STATUS.md is changed; supporting charts/CSVs remain on the state branch.
+      - name: Mirror latest portfolio dashboard to main
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE'))) && success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_BRANCH="bitget-paper-portfolio-state"
+          SNAPSHOT="$RUNNER_TEMP/bitget-main-status.md"
+          test -s STATUS.md
+          cp STATUS.md "$SNAPSHOT"
+
+          # The main-branch copy is a snapshot, but its chart/data links always
+          # resolve to the authoritative durable state branch.
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          branch = "bitget-paper-portfolio-state"
+          path = Path(os.environ["RUNNER_TEMP"]) / "bitget-main-status.md"
+          content = path.read_text(encoding="utf-8")
+          header = "# Bitget Stocks vs Crypto — Paper Portfolio Status\\n\\n"
+          if not content.startswith(header):
+              raise SystemExit("Generated portfolio STATUS.md has an unexpected heading; refusing to publish it.")
+          banner = (
+              f"> **Automatically synchronized main-branch snapshot.** The authoritative live dashboard "
+              f"and SQLite ledger continue to update on [the durable state branch](https://github.com/{repo}/tree/{branch}). "
+              f"Open the [latest live dashboard](https://github.com/{repo}/blob/{branch}/STATUS.md) for the newest marks.\\n\\n"
+          )
+          content = header + banner + content[len(header):]
+          image = f"https://raw.githubusercontent.com/{repo}/{branch}/equity_curve.svg"
+          content = re.sub(r"(!\\[[^\\]]*\\]\\()equity_curve\\.svg(\\))", rf"\\g<1>{image}\\g<2>", content)
+          for filename in ("equity_curve.csv", "daily_equity.csv", "trade_history.csv"):
+              target = f"https://github.com/{repo}/blob/{branch}/{filename}"
+              content = re.sub(rf"(\\]\\(){re.escape(filename)}(\\))", rf"\\g<1>{target}\\g<2>", content)
+          path.write_text(content, encoding="utf-8")
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+users.noreply.github.com"
+
+          # Refresh main before each attempt so unrelated commits are preserved.
+          for attempt in 1 2 3; do
+            git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+            git checkout -B main refs/remotes/origin/main
+            cp "$SNAPSHOT" STATUS.md
+            git add -- STATUS.md
+            if git diff --cached --quiet; then
+              echo "main/STATUS.md already matches the latest durable portfolio snapshot."
+              exit 0
+            fi
+            git commit -m "Sync latest paper portfolio dashboard to main"
+            if git push origin "HEAD:refs/heads/main"; then
+              echo "Published the latest portfolio STATUS.md snapshot to main."
+              exit 0
+            fi
+            echo "main changed during publish attempt $attempt; fetching and retrying." >&2
+          done
+          echo "Could not publish main/STATUS.md after three fast-forward-safe attempts." >&2
+          exit 1
+
       - name: Upload latest reports and restorable database backup
         if: always()
         uses: actions/upload-artifact@v4
