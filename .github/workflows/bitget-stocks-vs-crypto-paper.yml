@@ -335,7 +335,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          STATE_BRANCH="bitget-paper-portfolio-state"
           SNAPSHOT="$RUNNER_TEMP/bitget-main-status.md"
           test -s STATUS.md
           cp STATUS.md "$SNAPSHOT"
@@ -343,32 +342,33 @@ jobs:
           # The main-branch copy is a snapshot, but its chart/data links always
           # resolve to the authoritative durable state branch.
           python - <<'PY'
-          import os, re
+          import os
           from pathlib import Path
 
           repo = os.environ["GITHUB_REPOSITORY"]
           branch = "bitget-paper-portfolio-state"
           path = Path(os.environ["RUNNER_TEMP"]) / "bitget-main-status.md"
           content = path.read_text(encoding="utf-8")
-          header = "# Bitget Stocks vs Crypto — Paper Portfolio Status\\n\\n"
+          header = "# Bitget Stocks vs Crypto — Paper Portfolio Status\n\n"
           if not content.startswith(header):
               raise SystemExit("Generated portfolio STATUS.md has an unexpected heading; refusing to publish it.")
           banner = (
               f"> **Automatically synchronized main-branch snapshot.** The authoritative live dashboard "
               f"and SQLite ledger continue to update on [the durable state branch](https://github.com/{repo}/tree/{branch}). "
-              f"Open the [latest live dashboard](https://github.com/{repo}/blob/{branch}/STATUS.md) for the newest marks.\\n\\n"
+              f"Open the [latest live dashboard](https://github.com/{repo}/blob/{branch}/STATUS.md) for the newest marks.\n\n"
           )
           content = header + banner + content[len(header):]
           image = f"https://raw.githubusercontent.com/{repo}/{branch}/equity_curve.svg"
-          content = re.sub(r"(!\\[[^\\]]*\\]\\()equity_curve\\.svg(\\))", rf"\\g<1>{image}\\g<2>", content)
+          content = content.replace("![Portfolio equity curve](equity_curve.svg)",
+                                    f"![Portfolio equity curve]({image})")
           for filename in ("equity_curve.csv", "daily_equity.csv", "trade_history.csv"):
               target = f"https://github.com/{repo}/blob/{branch}/{filename}"
-              content = re.sub(rf"(\\]\\(){re.escape(filename)}(\\))", rf"\\g<1>{target}\\g<2>", content)
+              content = content.replace(f"]({filename})", f"]({target})")
           path.write_text(content, encoding="utf-8")
           PY
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # Refresh main before each attempt so unrelated commits are preserved.
           for attempt in 1 2 3; do
