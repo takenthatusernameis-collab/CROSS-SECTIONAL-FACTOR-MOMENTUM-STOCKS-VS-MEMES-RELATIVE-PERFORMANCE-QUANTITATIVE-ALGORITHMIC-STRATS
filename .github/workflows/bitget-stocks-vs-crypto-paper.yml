@@ -336,8 +336,17 @@ jobs:
         run: |
           set -euo pipefail
           SNAPSHOT="$RUNNER_TEMP/bitget-main-status.md"
+          DB_COPY="$RUNNER_TEMP/bitget_paper.sqlite3"
           test -s STATUS.md
+          test -s "$DB_COPY"
           cp STATUS.md "$SNAPSHOT"
+          # Checking out main removes the state-branch database from the worktree.
+          # Restore the exact same bytes so the later artifact-upload step still includes it.
+          restore_paper_db() {
+            mkdir -p "$(dirname "$PAPER_DB")"
+            cp "$DB_COPY" "$PAPER_DB"
+          }
+          trap restore_paper_db EXIT
 
           # The main-branch copy is a snapshot, but its chart/data links always
           # resolve to the authoritative durable state branch.
