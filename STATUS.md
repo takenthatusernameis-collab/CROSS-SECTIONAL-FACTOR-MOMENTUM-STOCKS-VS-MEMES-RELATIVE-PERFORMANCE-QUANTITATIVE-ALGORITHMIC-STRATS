@@ -6,20 +6,20 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **9.31 USDT** |
+| Current NAV | **8.72 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-0.69 USDT** |
-| Portfolio ROI vs starting capital | **-6.91%** |
-| Current-cycle ROI | 2.11% |
-| Unrealized P&L (gross) | 0.13 USDT |
+| NAV change vs starting capital | **-1.28 USDT** |
+| Portfolio ROI vs starting capital | **-12.82%** |
+| Current-cycle ROI | -4.38% |
+| Unrealized P&L (gross) | -0.43 USDT |
 | Cumulative realized gross P&L | -0.49 USDT |
 | Fees paid to date | 0.05 USDT |
 | Funding posted to ledger | -0.26 USDT |
-| Estimated funding pending | -0.02 USDT |
-| Gross exposure | 18.19 USDT |
+| Estimated funding pending | -0.05 USDT |
+| Gross exposure | 18.30 USDT |
 | Closed trades | 4 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-16 09:25:16 UTC._
+_NAV source: live mark-to-market observation. Values as of 2026-11-16 14:09:38 UTC._
 
 ## Latest workflow result
 
@@ -31,9 +31,9 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-16 09:25:16 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-0.69 USDT**
-- **Lifetime portfolio ROI:** **-6.91%**
-- **Equity-curve observations:** 34
+- **Current equity P&L vs initial capital:** **-1.28 USDT**
+- **Lifetime portfolio ROI:** **-12.82%**
+- **Equity-curve observations:** 35
 - **Closed trades:** 4 | **Open trades:** 2
 - **Realized net P&L on closed trades:** -0.80 USDT
 - **Closed-trade win rate:** 50.00%
@@ -64,14 +64,14 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | DXYZUSDT | 0.330000 | 27.72300000 | 27.70300000 | -0.01 USDT | -0.21% |
-| SHORT | SOPHUSDT | 10,112.000000 | 0.00090900 | 0.00089500 | 0.14 USDT | 1.24% |
+| LONG | DXYZUSDT | 0.330000 | 27.72300000 | 27.01100000 | -0.23 USDT | -2.70% |
+| SHORT | SOPHUSDT | 10,112.000000 | 0.00090900 | 0.00092800 | -0.19 USDT | -2.71% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -38.45% (observed minute history)
-- **Current holding-cycle MDD:** -16.65%
-- **Minute-data coverage:** 321/321 (100.00%)
+- **Current holding-cycle MDD:** -19.22%
+- **Minute-data coverage:** 605/605 (100.00%)
 - **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
 - **Historical risk intervals:** 2 complete / 0 incomplete
 - **Latest completed risk interval:** COMPLETE
@@ -86,11 +86,11 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-16 09:25:22 UTC
-- **Paper workflow started:** 2026-11-16 09:24:28 UTC
-- **Latest saved market observation:** 2026-11-16 09:25:16 UTC
-- **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [43839434500](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/43839434500)
+- **STATUS.md generated:** 2026-11-16 14:09:44 UTC
+- **Paper workflow started:** 2026-11-16 14:08:30 UTC
+- **Latest saved market observation:** 2026-11-16 14:09:38 UTC
+- **Workflow trigger:** **workflow_dispatch / paper**
+- **GitHub Actions run:** [43882624640](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/43882624640)
 
 ## Interpretation notes
 
