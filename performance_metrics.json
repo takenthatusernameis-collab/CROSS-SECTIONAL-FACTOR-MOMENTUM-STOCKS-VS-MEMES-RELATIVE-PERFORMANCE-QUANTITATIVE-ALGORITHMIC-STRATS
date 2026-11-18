@@ -1,13 +1,13 @@
 {
-  "closed_net_pnl_usdt": "-1.719140027520000000000000001",
-  "closed_trade_count": 6,
+  "closed_net_pnl_usdt": "-0.755416814807000000000000001",
+  "closed_trade_count": 8,
   "daily_return_count": 4,
   "downside_days": 3,
-  "downside_deviation_pct": "6.416220491921393569257315797",
+  "downside_deviation_pct": "6.446215435745808934542693620",
   "equity_curve_mdd_pct": "-25.15098229051452805821119008",
-  "mean_daily_return_pct": "-0.811321687032440832058514415",
+  "mean_daily_return_pct": "-0.894613104944726829692846925",
   "open_trade_count": 2,
-  "profit_factor": "0.1800930733974301186090714112",
+  "profit_factor": "0.6397201687952062548570545788",
   "sortino": null,
   "sortino_annualization_days": 365,
   "sortino_min_daily_returns": 20,
@@ -15,6 +15,6 @@
   "sortino_status": "INSUFFICIENT_HISTORY: 4/20 daily returns",
   "sortino_target_daily_pct": "0",
   "status": "OK",
-  "trade_count_total": 8,
-  "win_rate_pct": "33.33333333333333333333333333"
+  "trade_count_total": 10,
+  "win_rate_pct": "50.0"
 }

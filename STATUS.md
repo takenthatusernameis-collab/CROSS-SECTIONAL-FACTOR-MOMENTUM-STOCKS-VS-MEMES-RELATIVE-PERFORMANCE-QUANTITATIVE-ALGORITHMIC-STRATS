@@ -6,24 +6,24 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **9.29 USDT** |
+| Current NAV | **9.26 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-0.71 USDT** |
-| Portfolio ROI vs starting capital | **-7.11%** |
-| Current-cycle ROI | 12.65% |
-| Unrealized P&L (gross) | 0.97 USDT |
-| Cumulative realized gross P&L | -1.25 USDT |
-| Fees paid to date | 0.08 USDT |
-| Funding posted to ledger | -0.40 USDT |
-| Estimated funding pending | 0.05 USDT |
-| Gross exposure | 16.24 USDT |
-| Closed trades | 6 |
+| NAV change vs starting capital | **-0.74 USDT** |
+| Portfolio ROI vs starting capital | **-7.43%** |
+| Current-cycle ROI | Not available |
+| Unrealized P&L (gross) | 0.02 USDT |
+| Cumulative realized gross P&L | -0.32 USDT |
+| Fees paid to date | 0.10 USDT |
+| Funding posted to ledger | -0.35 USDT |
+| Estimated funding pending | 0.00 USDT |
+| Gross exposure | 18.44 USDT |
+| Closed trades | 8 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-18 10:16:34 UTC._
+_NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values as of 2026-11-18 15:04:42 UTC._
 
 ## Latest workflow result
 
-- **Paper runner status:** **MONITORING_ONLY**
+- **Paper runner status:** **PAPER_UPDATED**
 - **Ranking data gate:** PASS
 - **Monitoring operation:** MONITORING
 - **Age of latest saved mark/snapshot:** 0 minutes
@@ -31,13 +31,13 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-18 10:16:34 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-0.71 USDT**
-- **Lifetime portfolio ROI:** **-7.11%**
-- **Equity-curve observations:** 60
-- **Closed trades:** 6 | **Open trades:** 2
-- **Realized net P&L on closed trades:** -1.72 USDT
-- **Closed-trade win rate:** 33.33%
-- **Profit factor:** 0.1800930733974301186090714112
+- **Current equity P&L vs initial capital:** **-0.74 USDT**
+- **Lifetime portfolio ROI:** **-7.43%**
+- **Equity-curve observations:** 61
+- **Closed trades:** 8 | **Open trades:** 2
+- **Realized net P&L on closed trades:** -0.76 USDT
+- **Closed-trade win rate:** 50.00%
+- **Profit factor:** 0.6397201687952062548570545788
 - **Annualized Sortino ratio:** **Not yet statistically available**
 - **Sortino status:** INSUFFICIENT_HISTORY: 4/20 daily returns
 - **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
@@ -56,8 +56,10 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-18 10:16:34 U
 | 4 | 2026-11-15 | SHORT | KAVAUSDT | CLOSED | 0.02938000 | 0.02945000 | -0.31 USDT | -3.41% |
 | 5 | 2026-11-16 | LONG | DXYZUSDT | CLOSED | 27.72300000 | 26.60642424 | -0.38 USDT | -4.16% |
 | 6 | 2026-11-16 | SHORT | SOPHUSDT | CLOSED | 0.00090900 | 0.00094800 | -0.54 USDT | -5.90% |
-| 7 | 2026-11-17 | LONG | UVXYUSDT | OPEN | 20.38900000 | — | — USDT | Not available |
-| 8 | 2026-11-17 | SHORT | JCTUSDT | OPEN | 0.00214100 | — | — USDT | Not available |
+| 7 | 2026-11-17 | LONG | UVXYUSDT | CLOSED | 20.38900000 | 21.66700000 | 0.54 USDT | 6.64% |
+| 8 | 2026-11-17 | SHORT | JCTUSDT | CLOSED | 0.00214100 | 0.00203200 | 0.42 USDT | 5.10% |
+| 9 | 2026-11-18 | LONG | SHAZUSDT | OPEN | 24.25000000 | — | — USDT | Not available |
+| 10 | 2026-11-18 | SHORT | BREVUSDT | OPEN | 0.08598000 | — | — USDT | Not available |
 
 Sortino remains unavailable until enough daily observations exist; no ratio is inferred from a short initial sample.
 
@@ -66,33 +68,33 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | UVXYUSDT | 0.400000 | 20.38900000 | 21.36800000 | 0.39 USDT | 5.18% |
-| SHORT | JCTUSDT | 3,863.000000 | 0.00214100 | 0.00199200 | 0.58 USDT | 6.97% |
+| LONG | SHAZUSDT | 0.380000 | 24.25000000 | 24.31000000 | 0.02 USDT | 0.19% |
+| SHORT | BREVUSDT | 107.000000 | 0.08598000 | 0.08597000 | 0.00 USDT | -0.05% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -38.45% (observed minute history)
-- **Current holding-cycle MDD:** -12.48%
-- **Minute-data coverage:** 1383/1383 (100.00%)
-- **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
-- **Historical risk intervals:** 3 complete / 0 incomplete
+- **Current holding-cycle MDD:** Not available (not established yet)
+- **Minute-data coverage:** not started; awaiting first completed one-minute interval
+- **Risk-data quality:** **NO_MINUTE_HISTORY**
+- **Historical risk intervals:** 4 complete / 0 incomplete
 - **Latest completed risk interval:** COMPLETE
 
 ## Cooldown safeguard
 
 - **Cooldown flag:** **ACTIVE (1)**
-- Activated: 2026-11-17 11:12:25 UTC
-- Scheduled reset: 2026-11-18 11:13:00 UTC
-- Current cycle start: 2026-11-17 11:12:25 UTC
+- Activated: 2026-11-18 15:03:37 UTC
+- Scheduled reset: 2026-11-19 15:04:00 UTC
+- Current cycle start: 2026-11-18 15:03:37 UTC
 - A new pair is built only when the binary flag is 0 and the ranking/depth/accounting gates pass.
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-18 10:16:40 UTC
-- **Paper workflow started:** 2026-11-18 10:16:00 UTC
-- **Latest saved market observation:** 2026-11-18 10:16:34 UTC
-- **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [44283725782](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/44283725782)
+- **STATUS.md generated:** 2026-11-18 15:04:53 UTC
+- **Paper workflow started:** 2026-11-18 15:03:37 UTC
+- **Latest saved market observation:** 2026-11-18 15:04:42 UTC
+- **Workflow trigger:** **workflow_dispatch / paper**
+- **GitHub Actions run:** [44331165857](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/44331165857)
 
 ## Interpretation notes
 
