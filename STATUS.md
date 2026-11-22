@@ -6,24 +6,24 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **8.46 USDT** |
+| Current NAV | **8.61 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-1.54 USDT** |
-| Portfolio ROI vs starting capital | **-15.44%** |
-| Current-cycle ROI | Not available |
-| Unrealized P&L (gross) | -0.01 USDT |
+| NAV change vs starting capital | **-1.39 USDT** |
+| Portfolio ROI vs starting capital | **-13.88%** |
+| Current-cycle ROI | 1.85% |
+| Unrealized P&L (gross) | 0.14 USDT |
 | Cumulative realized gross P&L | -0.79 USDT |
 | Fees paid to date | 0.16 USDT |
 | Funding posted to ledger | -0.59 USDT |
-| Estimated funding pending | 0.00 USDT |
-| Gross exposure | 16.87 USDT |
+| Estimated funding pending | -0.00 USDT |
+| Gross exposure | 16.66 USDT |
 | Closed trades | 14 |
 
-_NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values as of 2026-11-21 22:54:46 UTC._
+_NAV source: live mark-to-market observation. Values as of 2026-11-22 02:52:19 UTC._
 
 ## Latest workflow result
 
-- **Paper runner status:** **PAPER_UPDATED**
+- **Paper runner status:** **MONITORING_ONLY**
 - **Ranking data gate:** PASS
 - **Monitoring operation:** MONITORING
 - **Age of latest saved mark/snapshot:** 0 minutes
@@ -31,15 +31,15 @@ _NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-1.54 USDT**
-- **Lifetime portfolio ROI:** **-15.44%**
-- **Equity-curve observations:** 93
+- **Current equity P&L vs initial capital:** **-1.39 USDT**
+- **Lifetime portfolio ROI:** **-13.88%**
+- **Equity-curve observations:** 94
 - **Closed trades:** 14 | **Open trades:** 2
 - **Realized net P&L on closed trades:** -1.52 USDT
 - **Closed-trade win rate:** 42.86%
 - **Profit factor:** 0.6881098576040734044236525966
 - **Annualized Sortino ratio:** **Not yet statistically available**
-- **Sortino status:** INSUFFICIENT_HISTORY: 7/20 daily returns
+- **Sortino status:** INSUFFICIENT_HISTORY: 8/20 daily returns
 - **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
 - **Sampled equity-curve MDD:** -25.97%
 
@@ -74,15 +74,15 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | CONLUSDT | 5.170000 | 1.63700000 | 1.63500000 | -0.01 USDT | -0.18% |
-| SHORT | MMTUSDT | 40.000000 | 0.21040000 | 0.21050000 | -0.00 USDT | -0.11% |
+| LONG | CONLUSDT | 5.170000 | 1.63700000 | 1.63000000 | -0.04 USDT | -0.55% |
+| SHORT | MMTUSDT | 40.000000 | 0.21040000 | 0.20590000 | 0.18 USDT | 2.00% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -38.45% (observed minute history)
-- **Current holding-cycle MDD:** Not available (not established yet)
-- **Minute-data coverage:** not started; awaiting first completed one-minute interval
-- **Risk-data quality:** **NO_MINUTE_HISTORY**
+- **Current holding-cycle MDD:** -4.33%
+- **Minute-data coverage:** 236/236 (100.00%)
+- **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
 - **Historical risk intervals:** 7 complete / 0 incomplete
 - **Latest completed risk interval:** COMPLETE
 
@@ -96,11 +96,11 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-21 22:54:54 UTC
-- **Paper workflow started:** 2026-11-21 22:54:17 UTC
-- **Latest saved market observation:** 2026-11-21 22:54:46 UTC
+- **STATUS.md generated:** 2026-11-22 02:52:22 UTC
+- **Paper workflow started:** 2026-11-22 02:51:52 UTC
+- **Latest saved market observation:** 2026-11-22 02:52:19 UTC
 - **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [44959103518](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/44959103518)
+- **GitHub Actions run:** [44978012401](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/44978012401)
 
 ## Interpretation notes
 
