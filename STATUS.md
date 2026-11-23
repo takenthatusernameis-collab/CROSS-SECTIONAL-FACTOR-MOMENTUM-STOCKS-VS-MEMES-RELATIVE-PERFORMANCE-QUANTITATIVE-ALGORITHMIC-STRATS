@@ -6,20 +6,20 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **8.47 USDT** |
+| Current NAV | **7.06 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-1.53 USDT** |
-| Portfolio ROI vs starting capital | **-15.29%** |
-| Current-cycle ROI | -0.71% |
-| Unrealized P&L (gross) | -0.05 USDT |
+| NAV change vs starting capital | **-2.94 USDT** |
+| Portfolio ROI vs starting capital | **-29.40%** |
+| Current-cycle ROI | -17.25% |
+| Unrealized P&L (gross) | -1.46 USDT |
 | Cumulative realized gross P&L | -0.71 USDT |
 | Fees paid to date | 0.18 USDT |
 | Funding posted to ledger | -0.59 USDT |
 | Estimated funding pending | -0.01 USDT |
-| Gross exposure | 15.56 USDT |
+| Gross exposure | 16.49 USDT |
 | Closed trades | 16 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-23 00:10:58 UTC._
+_NAV source: live mark-to-market observation. Values as of 2026-11-23 04:00:11 UTC._
 
 ## Latest workflow result
 
@@ -31,9 +31,9 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-23 00:10:58 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-1.53 USDT**
-- **Lifetime portfolio ROI:** **-15.29%**
-- **Equity-curve observations:** 98
+- **Current equity P&L vs initial capital:** **-2.94 USDT**
+- **Lifetime portfolio ROI:** **-29.40%**
+- **Equity-curve observations:** 99
 - **Closed trades:** 16 | **Open trades:** 2
 - **Realized net P&L on closed trades:** -1.46 USDT
 - **Closed-trade win rate:** 43.75%
@@ -41,7 +41,7 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-23 00:10:58 U
 - **Annualized Sortino ratio:** **Not yet statistically available**
 - **Sortino status:** INSUFFICIENT_HISTORY: 9/20 daily returns
 - **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
-- **Sampled equity-curve MDD:** -25.97%
+- **Sampled equity-curve MDD:** -29.59%
 
 ![Portfolio equity curve](equity_curve.svg)
 [Complete equity curve CSV](equity_curve.csv) · [Daily equity and returns](daily_equity.csv) · [Complete trade history](trade_history.csv)
@@ -76,14 +76,14 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | SNXXUSDT | 4.330000 | 1.96800000 | 1.96400000 | -0.02 USDT | -0.42% |
-| SHORT | EVAAUSDT | 3.000000 | 2.33990000 | 2.35090000 | -0.03 USDT | -0.59% |
+| LONG | SNXXUSDT | 4.330000 | 1.96800000 | 1.90900000 | -0.26 USDT | -3.21% |
+| SHORT | EVAAUSDT | 3.000000 | 2.33990000 | 2.74200000 | -1.21 USDT | -17.30% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -38.45% (observed minute history)
-- **Current holding-cycle MDD:** -2.66%
-- **Minute-data coverage:** 35/35 (100.00%)
+- **Current holding-cycle MDD:** -20.57%
+- **Minute-data coverage:** 264/264 (100.00%)
 - **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
 - **Historical risk intervals:** 8 complete / 0 incomplete
 - **Latest completed risk interval:** COMPLETE
@@ -98,11 +98,11 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-23 00:11:02 UTC
-- **Paper workflow started:** 2026-11-23 00:10:29 UTC
-- **Latest saved market observation:** 2026-11-23 00:10:58 UTC
-- **Workflow trigger:** **workflow_dispatch / paper**
-- **GitHub Actions run:** [45087194724](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45087194724)
+- **STATUS.md generated:** 2026-11-23 04:00:15 UTC
+- **Paper workflow started:** 2026-11-23 03:59:31 UTC
+- **Latest saved market observation:** 2026-11-23 04:00:11 UTC
+- **Workflow trigger:** **schedule / paper**
+- **GitHub Actions run:** [45109133224](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45109133224)
 
 ## Interpretation notes
 
