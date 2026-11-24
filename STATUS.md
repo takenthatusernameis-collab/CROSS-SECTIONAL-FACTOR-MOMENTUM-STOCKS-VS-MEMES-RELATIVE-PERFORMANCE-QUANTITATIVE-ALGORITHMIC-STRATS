@@ -6,24 +6,24 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **8.32 USDT** |
+| Current NAV | **7.56 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-1.68 USDT** |
-| Portfolio ROI vs starting capital | **-16.80%** |
-| Current-cycle ROI | -2.48% |
-| Unrealized P&L (gross) | -0.20 USDT |
-| Cumulative realized gross P&L | -0.71 USDT |
-| Fees paid to date | 0.18 USDT |
-| Funding posted to ledger | -0.59 USDT |
-| Estimated funding pending | -0.01 USDT |
-| Gross exposure | 21.38 USDT |
-| Closed trades | 16 |
+| NAV change vs starting capital | **-2.44 USDT** |
+| Portfolio ROI vs starting capital | **-24.37%** |
+| Current-cycle ROI | Not available |
+| Unrealized P&L (gross) | -0.02 USDT |
+| Cumulative realized gross P&L | -1.62 USDT |
+| Fees paid to date | 0.19 USDT |
+| Funding posted to ledger | -0.60 USDT |
+| Estimated funding pending | 0.00 USDT |
+| Gross exposure | 15.17 USDT |
+| Closed trades | 18 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-23 14:26:59 UTC._
+_NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values as of 2026-11-24 01:51:15 UTC._
 
 ## Latest workflow result
 
-- **Paper runner status:** **MONITORING_ONLY**
+- **Paper runner status:** **PAPER_UPDATED**
 - **Ranking data gate:** PASS
 - **Monitoring operation:** MONITORING
 - **Age of latest saved mark/snapshot:** 0 minutes
@@ -31,15 +31,15 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-23 14:26:59 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-1.68 USDT**
-- **Lifetime portfolio ROI:** **-16.80%**
-- **Equity-curve observations:** 100
-- **Closed trades:** 16 | **Open trades:** 2
-- **Realized net P&L on closed trades:** -1.46 USDT
-- **Closed-trade win rate:** 43.75%
-- **Profit factor:** 0.7167777878393206617220039360
+- **Current equity P&L vs initial capital:** **-2.44 USDT**
+- **Lifetime portfolio ROI:** **-24.37%**
+- **Equity-curve observations:** 101
+- **Closed trades:** 18 | **Open trades:** 2
+- **Realized net P&L on closed trades:** -2.41 USDT
+- **Closed-trade win rate:** 44.44%
+- **Profit factor:** 0.6385883476576336304740826205
 - **Annualized Sortino ratio:** **Not yet statistically available**
-- **Sortino status:** INSUFFICIENT_HISTORY: 9/20 daily returns
+- **Sortino status:** INSUFFICIENT_HISTORY: 10/20 daily returns
 - **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
 - **Sampled equity-curve MDD:** -29.59%
 
@@ -66,8 +66,10 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-23 14:26:59 U
 | 14 | 2026-11-20 | SHORT | AKEUSDT | CLOSED | 0.00625270 | 0.00526220 | 1.21 USDT | 15.73% |
 | 15 | 2026-11-21 | LONG | CONLUSDT | CLOSED | 1.63700000 | 1.70600000 | 0.35 USDT | 4.09% |
 | 16 | 2026-11-21 | SHORT | MMTUSDT | CLOSED | 0.21040000 | 0.21730000 | -0.29 USDT | -3.43% |
-| 17 | 2026-11-22 | LONG | SNXXUSDT | OPEN | 1.96800000 | — | — USDT | Not available |
-| 18 | 2026-11-22 | SHORT | EVAAUSDT | OPEN | 2.33990000 | — | — USDT | Not available |
+| 17 | 2026-11-22 | LONG | SNXXUSDT | CLOSED | 1.96800000 | 2.10200000 | 0.56 USDT | 6.52% |
+| 18 | 2026-11-22 | SHORT | EVAAUSDT | CLOSED | 2.33990000 | 2.83860000 | -1.50 USDT | -21.40% |
+| 19 | 2026-11-24 | LONG | NVDLUSDT | OPEN | 16.81200000 | — | — USDT | Not available |
+| 20 | 2026-11-24 | SHORT | UNITASUSDT | OPEN | 0.18050000 | — | — USDT | Not available |
 
 Sortino remains unavailable until enough daily observations exist; no ratio is inferred from a short initial sample.
 
@@ -76,33 +78,33 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | SNXXUSDT | 4.330000 | 1.96800000 | 2.61900000 | 2.82 USDT | 32.78% |
-| SHORT | EVAAUSDT | 3.000000 | 2.33990000 | 3.34500000 | -3.02 USDT | -43.08% |
+| LONG | NVDLUSDT | 0.450000 | 16.81200000 | 16.81500000 | 0.00 USDT | -0.04% |
+| SHORT | UNITASUSDT | 42.000000 | 0.18050000 | 0.18100000 | -0.02 USDT | -0.34% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -51.73% (observed minute history)
-- **Current holding-cycle MDD:** -43.70%
-- **Minute-data coverage:** 891/891 (100.00%)
-- **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
-- **Historical risk intervals:** 8 complete / 0 incomplete
+- **Current holding-cycle MDD:** Not available (not established yet)
+- **Minute-data coverage:** not started; awaiting first completed one-minute interval
+- **Risk-data quality:** **NO_MINUTE_HISTORY**
+- **Historical risk intervals:** 9 complete / 0 incomplete
 - **Latest completed risk interval:** COMPLETE
 
 ## Cooldown safeguard
 
 - **Cooldown flag:** **ACTIVE (1)**
-- Activated: 2026-11-22 23:34:13 UTC
-- Scheduled reset: 2026-11-23 23:35:00 UTC
-- Current cycle start: 2026-11-22 23:34:13 UTC
+- Activated: 2026-11-24 01:50:31 UTC
+- Scheduled reset: 2026-11-25 01:51:00 UTC
+- Current cycle start: 2026-11-24 01:50:31 UTC
 - A new pair is built only when the binary flag is 0 and the ranking/depth/accounting gates pass.
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-23 14:27:04 UTC
-- **Paper workflow started:** 2026-11-23 14:26:30 UTC
-- **Latest saved market observation:** 2026-11-23 14:26:59 UTC
+- **STATUS.md generated:** 2026-11-24 01:51:27 UTC
+- **Paper workflow started:** 2026-11-24 01:50:31 UTC
+- **Latest saved market observation:** 2026-11-24 01:51:15 UTC
 - **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [45194210396](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45194210396)
+- **GitHub Actions run:** [45307987591](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45307987591)
 
 ## Interpretation notes
 
