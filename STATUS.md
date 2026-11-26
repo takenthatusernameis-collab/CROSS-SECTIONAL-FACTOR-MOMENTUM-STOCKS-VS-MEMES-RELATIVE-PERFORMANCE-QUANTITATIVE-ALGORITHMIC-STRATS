@@ -8,24 +8,24 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **6.55 USDT** |
+| Current NAV | **6.46 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-3.45 USDT** |
-| Portfolio ROI vs starting capital | **-34.50%** |
-| Current-cycle ROI | 11.22% |
-| Unrealized P&L (gross) | 0.65 USDT |
-| Cumulative realized gross P&L | -3.30 USDT |
-| Fees paid to date | 0.21 USDT |
+| NAV change vs starting capital | **-3.54 USDT** |
+| Portfolio ROI vs starting capital | **-35.37%** |
+| Current-cycle ROI | Not available |
+| Unrealized P&L (gross) | -0.02 USDT |
+| Cumulative realized gross P&L | -2.70 USDT |
+| Fees paid to date | 0.22 USDT |
 | Funding posted to ledger | -0.60 USDT |
-| Estimated funding pending | 0.01 USDT |
-| Gross exposure | 10.48 USDT |
-| Closed trades | 20 |
+| Estimated funding pending | 0.00 USDT |
+| Gross exposure | 12.89 USDT |
+| Closed trades | 22 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-25 23:52:36 UTC._
+_NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values as of 2026-11-26 05:29:37 UTC._
 
 ## Latest workflow result
 
-- **Paper runner status:** **MONITORING_ONLY**
+- **Paper runner status:** **PAPER_UPDATED**
 - **Ranking data gate:** PASS
 - **Monitoring operation:** MONITORING
 - **Age of latest saved mark/snapshot:** 0 minutes
@@ -33,15 +33,15 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-25 23:52:36 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-3.45 USDT**
-- **Lifetime portfolio ROI:** **-34.50%**
-- **Equity-curve observations:** 106
-- **Closed trades:** 20 | **Open trades:** 2
-- **Realized net P&L on closed trades:** -4.10 USDT
-- **Closed-trade win rate:** 40.00%
-- **Profit factor:** 0.5093737368123045650186846896
+- **Current equity P&L vs initial capital:** **-3.54 USDT**
+- **Lifetime portfolio ROI:** **-35.37%**
+- **Equity-curve observations:** 107
+- **Closed trades:** 22 | **Open trades:** 2
+- **Realized net P&L on closed trades:** -3.51 USDT
+- **Closed-trade win rate:** 40.91%
+- **Profit factor:** 0.6030911000379074910380713096
 - **Annualized Sortino ratio:** **Not yet statistically available**
-- **Sortino status:** INSUFFICIENT_HISTORY: 11/20 daily returns
+- **Sortino status:** INSUFFICIENT_HISTORY: 12/20 daily returns
 - **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
 - **Sampled equity-curve MDD:** -41.26%
 
@@ -72,8 +72,10 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-25 23:52:36 U
 | 18 | 2026-11-22 | SHORT | EVAAUSDT | CLOSED | 2.33990000 | 2.83860000 | -1.50 USDT | -21.40% |
 | 19 | 2026-11-24 | LONG | NVDLUSDT | CLOSED | 16.81200000 | 14.07800000 | -1.24 USDT | -16.37% |
 | 20 | 2026-11-24 | SHORT | UNITASUSDT | CLOSED | 0.18050000 | 0.19110000 | -0.45 USDT | -5.96% |
-| 21 | 2026-11-25 | LONG | SOXSUSDT | OPEN | 64.72300000 | — | — USDT | Not available |
-| 22 | 2026-11-25 | SHORT | DOSUSDT | OPEN | 0.09663000 | — | — USDT | Not available |
+| 21 | 2026-11-25 | LONG | SOXSUSDT | CLOSED | 64.72300000 | 59.18600000 | -0.50 USDT | -8.58% |
+| 22 | 2026-11-25 | SHORT | DOSUSDT | CLOSED | 0.09663000 | 0.07840000 | 1.08 USDT | 18.70% |
+| 23 | 2026-11-26 | LONG | FLNCUSDT | OPEN | 4.80600000 | — | — USDT | Not available |
+| 24 | 2026-11-26 | SHORT | SKYAIUSDT | OPEN | 0.03259000 | — | — USDT | Not available |
 
 Sortino remains unavailable until enough daily observations exist; no ratio is inferred from a short initial sample.
 
@@ -82,33 +84,33 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | SOXSUSDT | 0.090000 | 64.72300000 | 61.96500000 | -0.25 USDT | -4.29% |
-| SHORT | DOSUSDT | 60.000000 | 0.09663000 | 0.08168000 | 0.90 USDT | 15.40% |
+| LONG | FLNCUSDT | 1.340000 | 4.80600000 | 4.79900000 | -0.01 USDT | -0.21% |
+| SHORT | SKYAIUSDT | 198.000000 | 0.03259000 | 0.03262000 | -0.01 USDT | -0.15% |
 
 ## Risk
 
 - **Strategy maximum drawdown:** -51.73% (observed minute history)
-- **Current holding-cycle MDD:** -20.53%
-- **Minute-data coverage:** 1151/1151 (100.00%)
-- **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
-- **Historical risk intervals:** 10 complete / 0 incomplete
+- **Current holding-cycle MDD:** Not available (not established yet)
+- **Minute-data coverage:** not started; awaiting first completed one-minute interval
+- **Risk-data quality:** **NO_MINUTE_HISTORY**
+- **Historical risk intervals:** 11 complete / 0 incomplete
 - **Latest completed risk interval:** COMPLETE
 
 ## Cooldown safeguard
 
 - **Cooldown flag:** **ACTIVE (1)**
-- Activated: 2026-11-25 04:39:17 UTC
-- Scheduled reset: 2026-11-26 04:40:00 UTC
-- Current cycle start: 2026-11-25 04:39:17 UTC
+- Activated: 2026-11-26 05:28:23 UTC
+- Scheduled reset: 2026-11-27 05:29:00 UTC
+- Current cycle start: 2026-11-26 05:28:23 UTC
 - A new pair is built only when the binary flag is 0 and the ranking/depth/accounting gates pass.
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-25 23:52:39 UTC
-- **Paper workflow started:** 2026-11-25 23:51:45 UTC
-- **Latest saved market observation:** 2026-11-25 23:52:36 UTC
+- **STATUS.md generated:** 2026-11-26 05:29:44 UTC
+- **Paper workflow started:** 2026-11-26 05:28:23 UTC
+- **Latest saved market observation:** 2026-11-26 05:29:37 UTC
 - **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [45722350054](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45722350054)
+- **GitHub Actions run:** [45761661796](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45761661796)
 
 ## Interpretation notes
 
