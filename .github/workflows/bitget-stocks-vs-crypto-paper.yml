@@ -157,7 +157,7 @@ jobs:
           PY
 
       - name: Restore durable SQLite paper ledger
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper') || (github.event_name == 'push' && !contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE'))
         shell: bash
         run: |
           set -euo pipefail
@@ -254,7 +254,7 @@ jobs:
         run: python scripts/run_bitget_paper.py --diagnostic-only --db-path "$PAPER_DB" --output-dir "$PAPER_OUTPUT" --initial-nav-usdt "$PAPER_INITIAL_NAV_USDT"
 
       - name: Check SQLite integrity before persistence
-        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE'))) && success()
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || github.event_name == 'push') && success()
         run: |
           python - <<'PY'
           import sqlite3
@@ -274,7 +274,7 @@ jobs:
           PY
 
       - name: Persist SQLite portfolio and monitoring state
-        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE'))) && success()
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || github.event_name == 'push') && success()
         shell: bash
         run: |
           set -euo pipefail
@@ -331,7 +331,7 @@ jobs:
       # Mirror the exact durable-branch report to main for users who browse the default branch.
       # Only STATUS.md is changed; supporting charts/CSVs remain on the state branch.
       - name: Mirror latest portfolio dashboard to main
-        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || (github.event_name == 'push' && contains(github.event.head_commit.message, 'RESTORE_BITGET_PAPER_STATE'))) && success()
+        if: ((github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'paper')) || github.event_name == 'push') && success()
         shell: bash
         run: |
           set -euo pipefail
