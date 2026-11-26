@@ -295,7 +295,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --report-json "$PAPER_OUTPUT/bitget_paper_report.json"
           test -s "$PAPER_OUTPUT/STATUS.md"
-          for required in equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json; do
+          for required in equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json inverted_equity_curve.svg inverted_equity_curve.csv inverted_daily_equity.csv inverted_performance_metrics.json; do
             test -s "$PAPER_OUTPUT/$required"
           done
 
@@ -316,12 +316,12 @@ jobs:
           mkdir -p state
           cp "$DB_COPY" state/bitget_paper.sqlite3
           cp "$PAPER_OUTPUT/STATUS.md" STATUS.md
-          for required in equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json; do
+          for required in equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json inverted_equity_curve.svg inverted_equity_curve.csv inverted_daily_equity.csv inverted_performance_metrics.json; do
             cp "$PAPER_OUTPUT/$required" "$required"
           done
           if [[ -f RESET_PENDING.md ]]; then rm RESET_PENDING.md; fi
           if [[ -f RECOVERY_REQUIRED.md ]]; then rm RECOVERY_REQUIRED.md; fi
-          git add state/bitget_paper.sqlite3 STATUS.md equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json
+          git add state/bitget_paper.sqlite3 STATUS.md equity_curve.svg equity_curve.csv daily_equity.csv trade_history.csv performance_metrics.json inverted_equity_curve.svg inverted_equity_curve.csv inverted_daily_equity.csv inverted_performance_metrics.json
           git add -u -- RESET_PENDING.md RECOVERY_REQUIRED.md 2>/dev/null || true
           if ! git diff --cached --quiet; then
             git commit -m "Persist lifetime paper performance and readable status"
@@ -370,7 +370,10 @@ jobs:
           image = f"https://raw.githubusercontent.com/{repo}/{branch}/equity_curve.svg"
           content = content.replace("![Portfolio equity curve](equity_curve.svg)",
                                     f"![Portfolio equity curve]({image})")
-          for filename in ("equity_curve.csv", "daily_equity.csv", "trade_history.csv"):
+          inverted_image = f"https://raw.githubusercontent.com/{repo}/{branch}/inverted_equity_curve.svg"
+          content = content.replace("![Inverted positions counterfactual equity curve](inverted_equity_curve.svg)",
+                                    f"![Inverted positions counterfactual equity curve]({inverted_image})")
+          for filename in ("equity_curve.csv", "daily_equity.csv", "trade_history.csv", "inverted_equity_curve.csv", "inverted_daily_equity.csv", "inverted_performance_metrics.json"):
               target = f"https://github.com/{repo}/blob/{branch}/{filename}"
               content = content.replace(f"]({filename})", f"]({target})")
           path.write_text(content, encoding="utf-8")
