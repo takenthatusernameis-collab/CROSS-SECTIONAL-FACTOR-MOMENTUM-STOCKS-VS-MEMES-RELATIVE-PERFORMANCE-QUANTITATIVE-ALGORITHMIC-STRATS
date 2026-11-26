@@ -33,6 +33,17 @@ The `trades` table records each leg's entry/exit, size, gross P&L, entry/exit fe
 
 A selected pair is not replaced by a runner-up if either selected contract has insufficient book depth or invalid contract metadata. The whole rebalance is rolled back and the previously persisted state remains unchanged. No partial fill is invented.
 
+## Retrospective inverted-position alternative
+
+The original paper strategy remains unchanged. Alongside it, every paper workflow derives a separate counterfactual equity curve from the same durable trade history:
+
+- Reverse both legs while retaining the same selected stock and crypto contracts, original entry/exit timestamps and quantities: the original stock long becomes short, and the original crypto short becomes long.
+- Keep the $10 initial NAV and the same sequence of historical position changes; this is not a new ranking or paper campaign.
+- Retain recorded entry/exit trading fees and reverse posted and pending funding cashflows to reflect the opposite side.
+- Rebuild the alternative curve from the full SQLite ledger and saved monitoring marks on every workflow run. The original equity curve, trades, cooldown and execution path are not changed.
+- Publish inverted_equity_curve.svg, inverted_equity_curve.csv, inverted_daily_equity.csv and inverted_performance_metrics.json beside the original performance artifacts.
+
+**Execution limitation:** the historical opposite-side order-book VWAP was not stored. The counterfactual reuses original paper fill prices and quantities, so recorded fees and funding are accounted for, but incremental bid/ask spread impact for hypothetical opposite-side fills cannot be reconstructed. Treat the curve as a direction-inversion comparison, not an executable-fill backtest.
 ## Minute spread and drawdown reconstruction
 
 During every five-minute holding-period run, the workflow incrementally reconstructs newly completed one-minute observations from Bitget's public contract candles. On the first eligible scheduled run after the binary cooldown reset, it finalizes the prior interval at that workflow's recorded start timestamp before rebuilding the portfolio. The prior interval can exceed 24 hours if GitHub starts the eligible workflow late. It uses no TradingView API.
