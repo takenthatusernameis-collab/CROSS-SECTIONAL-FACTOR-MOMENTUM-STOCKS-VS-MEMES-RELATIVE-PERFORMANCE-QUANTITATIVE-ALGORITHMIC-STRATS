@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 from bitget_stocks_vs_crypto.inverted_performance import build_inverted_equity
@@ -44,7 +45,7 @@ class InvertedPerformanceTests(unittest.TestCase):
             metrics = build_inverted_equity(db_path, root / "out")
             self.assertEqual(metrics["observation_count"], 2)
             self.assertEqual(metrics["latest_nav_usdt"], "90.85")
-            self.assertEqual(metrics["latest_roi_pct"], "-9.15")
+            self.assertEqual(Decimal(metrics["latest_roi_pct"]), Decimal("-9.15"))
             self.assertTrue((root / "out" / "inverted_equity_curve.svg").is_file())
             self.assertTrue((root / "out" / "inverted_equity_curve.csv").is_file())
 
