@@ -19,6 +19,7 @@ if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
 from bitget_stocks_vs_crypto.performance import performance_summary, export_performance_artifacts
+from bitget_stocks_vs_crypto.inverted_performance import build_inverted_equity
 
 
 def _dec(value: Any) -> Decimal:
@@ -57,7 +58,8 @@ def cell(value: Any) -> str:
 def render_status(db_path: str | Path, *, workflow_started_ms: int | None = None,
                   generated_at_ms: int | None = None, run_id: str | None = None,
                   event_name: str | None = None, mode: str | None = None,
-                  repository: str | None = None, report_json: str | Path | None = None) -> str:
+                  repository: str | None = None, report_json: str | Path | None = None,
+                  inverted_performance: dict[str, Any] | None = None) -> str:
     """Render STATUS.md without modifying the SQLite database."""
     run: dict[str, Any] = {}
     report_warning = None
@@ -235,6 +237,20 @@ def render_status(db_path: str | Path, *, workflow_started_ms: int | None = None
             "", "### Full trade history", "", *trade_history_lines,
             "", "Sortino remains unavailable until enough daily observations exist; no ratio is inferred from a short initial sample.", ""
         ])
+        if inverted_performance:
+            inv = inverted_performance
+            lines.extend([
+                "", "## Inverted-position alternative", "",
+                "- This is a retrospective counterfactual using the same selected contracts, entry/exit times and quantities with both position directions reversed.",
+                f"- **Alternative equity:** **{fmt(inv.get('latest_nav_usdt'))} USDT** from {fmt(inv.get('initial_nav_usdt'))} USDT",
+                f"- **Alternative lifetime ROI:** **{pct(inv.get('latest_roi_pct'))}**",
+                f"- **Alternative sampled MDD:** {pct(inv.get('max_drawdown_pct'))}",
+                f"- **Observations:** {inv.get('observation_count', 0)} | **Closed legs:** {inv.get('closed_trade_count', 0)} | **Open legs:** {inv.get('open_trade_count', 0)}",
+                "", "![Inverted positions counterfactual equity curve](inverted_equity_curve.svg)",
+                "[Inverted equity curve CSV](inverted_equity_curve.csv) · [Inverted daily equity](inverted_daily_equity.csv) · [Alternative metrics](inverted_performance_metrics.json)",
+                "", f"- **Costs:** {cell(inv.get('costs', 'Recorded fees and reversed funding.'))}",
+                f"- **Execution limitation:** {cell(inv.get('execution_limit', 'Opposite-side historical order-book fills were not retained.'))}",
+            ])
         lines.extend(["", "## Open positions", "", *position_lines, "", "## Risk", "",
             f"- **Strategy maximum drawdown:** {pct(strategy_mdd)}" + (" (observed minute history)" if strategy_mdd is not None else " (not established from minute history yet)"),
             f"- **Current holding-cycle MDD:** {pct(cycle_mdd)}" + (" (observed bars; cycle may be partial)" if cycle_mdd is not None and quality != "COMPLETE_CURRENT_CYCLE" else ("" if cycle_mdd is not None else " (not established yet)")),
@@ -275,9 +291,11 @@ def main() -> int:
     parser.add_argument("--report-json")
     args = parser.parse_args()
     export_performance_artifacts(args.db_path, Path(args.output).parent)
+    inverted_performance = build_inverted_equity(args.db_path, Path(args.output).parent)
     content = render_status(args.db_path, workflow_started_ms=args.workflow_start_ms,
                             run_id=args.run_id, event_name=args.event_name, mode=args.mode,
-                            repository=args.repository, report_json=args.report_json)
+                            repository=args.repository, report_json=args.report_json,
+                            inverted_performance=inverted_performance)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(content, encoding="utf-8")
