@@ -3,12 +3,12 @@
   "costs": "recorded entry/exit fees retained; posted and pending funding cashflows sign-reversed",
   "execution_limit": "Original paper fill prices and quantities are reused for both directions. Historical opposite-side order-book VWAP was not stored, so incremental bid/ask spread impact for the inverted fills cannot be reconstructed.",
   "initial_nav_usdt": "10",
-  "latest_nav_usdt": "13.08659494407300000000000000",
-  "latest_pnl_usdt": "3.08659494407300000000000000",
-  "latest_roi_pct": "30.86594944073000000000000000",
+  "latest_nav_usdt": "13.23688607853300000000000000",
+  "latest_pnl_usdt": "3.23688607853300000000000000",
+  "latest_roi_pct": "32.36886078533000000000000000",
   "max_drawdown_pct": "-17.74460475126461474229666372",
   "method": "opposite-side counterfactual on the same selected contracts, timestamps and original quantities",
-  "observation_count": 107,
+  "observation_count": 108,
   "open_trade_count": 2,
   "status": "OK"
 }
