@@ -22,6 +22,7 @@ from bitget_stocks_vs_crypto.portfolio import (PaperError, fee_rate_for, parse_b
 from bitget_stocks_vs_crypto.monitor import monitor_open_positions
 from bitget_stocks_vs_crypto.risk import expected_minute_starts
 from bitget_stocks_vs_crypto.performance import (ensure_equity_start, record_equity_point, performance_summary, export_performance_artifacts)
+from bitget_stocks_vs_crypto.inverted_performance import build_inverted_equity
 
 
 def fetch_depth(symbol: str) -> dict[str, Any]:
@@ -608,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
             report["performance"] = {k:v for k,v in perf.items()
                                      if k not in {"equity_points","daily_closes","daily_returns","trades"}}
             export_performance_artifacts(db_path, out)
+            report["inverted_performance"] = build_inverted_equity(db_path, out)
         except Exception as exc:
             # The reporting layer never undoes committed paper accounting/monitoring.
             report["performance_warning"] = f"{type(exc).__name__}: {str(exc)[:800]}"
