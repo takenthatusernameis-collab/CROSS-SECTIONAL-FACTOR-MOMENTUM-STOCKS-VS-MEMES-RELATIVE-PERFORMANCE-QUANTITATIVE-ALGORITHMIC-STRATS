@@ -23,10 +23,10 @@ _NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values
 
 ## Latest workflow result
 
-- **Paper runner status:** **PAPER_UPDATED**
+- **Paper runner status:** **DIAGNOSTIC_ONLY_DEPTH_PASS**
 - **Ranking data gate:** PASS
-- **Monitoring operation:** MONITORING
-- **Age of latest saved mark/snapshot:** 0 minutes
+- **Monitoring operation:** not supplied
+- **Age of latest saved mark/snapshot:** 223 minutes
 
 ## Lifetime strategy performance
 
@@ -78,6 +78,20 @@ _NAV source: entry-time portfolio snapshot (awaiting first monitor mark). Values
 Sortino remains unavailable until enough daily observations exist; no ratio is inferred from a short initial sample.
 
 
+## Inverted-position alternative
+
+- This is a retrospective counterfactual using the same selected contracts, entry/exit times and quantities with both position directions reversed.
+- **Alternative equity:** **13.09 USDT** from 10.00 USDT
+- **Alternative lifetime ROI:** **30.87%**
+- **Alternative sampled MDD:** -17.74%
+- **Observations:** 107 | **Closed legs:** 22 | **Open legs:** 2
+
+![Inverted positions counterfactual equity curve](inverted_equity_curve.svg)
+[Inverted equity curve CSV](inverted_equity_curve.csv) · [Inverted daily equity](inverted_daily_equity.csv) · [Alternative metrics](inverted_performance_metrics.json)
+
+- **Costs:** recorded entry/exit fees retained; posted and pending funding cashflows sign-reversed
+- **Execution limitation:** Original paper fill prices and quantities are reused for both directions. Historical opposite-side order-book VWAP was not stored, so incremental bid/ask spread impact for the inverted fills cannot be reconstructed.
+
 ## Open positions
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
@@ -104,11 +118,11 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-26 05:29:44 UTC
-- **Paper workflow started:** 2026-11-26 05:28:23 UTC
+- **STATUS.md generated:** 2026-11-26 09:13:21 UTC
+- **Paper workflow started:** 2026-11-26 09:12:09 UTC
 - **Latest saved market observation:** 2026-11-26 05:29:37 UTC
-- **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [45761661796](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45761661796)
+- **Workflow trigger:** **push / diagnostic**
+- **GitHub Actions run:** [45789675451](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/45789675451)
 
 ## Interpretation notes
 
