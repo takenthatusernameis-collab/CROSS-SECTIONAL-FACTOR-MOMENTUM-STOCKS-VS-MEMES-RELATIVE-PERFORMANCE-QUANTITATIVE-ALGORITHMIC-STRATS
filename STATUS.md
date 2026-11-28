@@ -6,20 +6,20 @@
 
 | Metric | Latest value |
 |---|---:|
-| Current NAV | **6.61 USDT** |
+| Current NAV | **2.97 USDT** |
 | Starting capital | 10.00 USDT |
-| NAV change vs starting capital | **-3.39 USDT** |
-| Portfolio ROI vs starting capital | **-33.91%** |
-| Current-cycle ROI | -2.44% |
-| Unrealized P&L (gross) | -0.19 USDT |
+| NAV change vs starting capital | **-7.03 USDT** |
+| Portfolio ROI vs starting capital | **-70.33%** |
+| Current-cycle ROI | -56.21% |
+| Unrealized P&L (gross) | -3.84 USDT |
 | Cumulative realized gross P&L | -2.37 USDT |
 | Fees paid to date | 0.24 USDT |
 | Funding posted to ledger | -0.59 USDT |
 | Estimated funding pending | 0.00 USDT |
-| Gross exposure | 13.54 USDT |
+| Gross exposure | 17.15 USDT |
 | Closed trades | 24 |
 
-_NAV source: live mark-to-market observation. Values as of 2026-11-28 01:33:06 UTC._
+_NAV source: live mark-to-market observation. Values as of 2026-11-28 09:26:17 UTC._
 
 ## Latest workflow result
 
@@ -31,9 +31,9 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-28 01:33:06 U
 ## Lifetime strategy performance
 
 - **Initial capital:** 10.00 USDT
-- **Current equity P&L vs initial capital:** **-3.39 USDT**
-- **Lifetime portfolio ROI:** **-33.91%**
-- **Equity-curve observations:** 112
+- **Current equity P&L vs initial capital:** **-7.03 USDT**
+- **Lifetime portfolio ROI:** **-70.33%**
+- **Equity-curve observations:** 113
 - **Closed trades:** 24 | **Open trades:** 2
 - **Realized net P&L on closed trades:** -3.19 USDT
 - **Closed-trade win rate:** 41.67%
@@ -41,7 +41,7 @@ _NAV source: live mark-to-market observation. Values as of 2026-11-28 01:33:06 U
 - **Annualized Sortino ratio:** **Not yet statistically available**
 - **Sortino status:** INSUFFICIENT_HISTORY: 14/20 daily returns
 - **Sortino method:** consecutive UTC daily equity closes, 0% minimum acceptable return, annualized by √365; requires at least 20 valid daily returns and 5 negative days.
-- **Sampled equity-curve MDD:** -41.26%
+- **Sampled equity-curve MDD:** -70.41%
 
 ![Portfolio equity curve](equity_curve.svg)
 [Complete equity curve CSV](equity_curve.csv) · [Daily equity and returns](daily_equity.csv) · [Complete trade history](trade_history.csv)
@@ -83,10 +83,10 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 ## Inverted-position alternative
 
 - This is a retrospective counterfactual using the same selected contracts, entry/exit times and quantities with both position directions reversed.
-- **Alternative equity:** **12.91 USDT** from 10.00 USDT
-- **Alternative lifetime ROI:** **29.10%**
+- **Alternative equity:** **16.55 USDT** from 10.00 USDT
+- **Alternative lifetime ROI:** **65.52%**
 - **Alternative sampled MDD:** -17.74%
-- **Observations:** 112 | **Closed legs:** 24 | **Open legs:** 2
+- **Observations:** 113 | **Closed legs:** 24 | **Open legs:** 2
 
 ![Inverted positions counterfactual equity curve](inverted_equity_curve.svg)
 [Inverted equity curve CSV](inverted_equity_curve.csv) · [Inverted daily equity](inverted_daily_equity.csv) · [Alternative metrics](inverted_performance_metrics.json)
@@ -98,14 +98,14 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 | Leg | Contract | Quantity | Entry | Latest mark | Unrealized P&L | Trade ROI |
 |---|---|---:|---:|---:|---:|---:|
-| LONG | SNXXUSDT | 3.530000 | 1.92200000 | 1.91500000 | -0.02 USDT | -0.48% |
-| SHORT | EVAAUSDT | 5.000000 | 1.32240000 | 1.35590000 | -0.17 USDT | -2.64% |
+| LONG | SNXXUSDT | 3.530000 | 1.92200000 | 1.91000000 | -0.04 USDT | -0.74% |
+| SHORT | EVAAUSDT | 5.000000 | 1.32240000 | 2.08100000 | -3.79 USDT | -57.50% |
 
 ## Risk
 
-- **Strategy maximum drawdown:** -51.73% (observed minute history)
-- **Current holding-cycle MDD:** -7.39%
-- **Minute-data coverage:** 432/432 (100.00%)
+- **Strategy maximum drawdown:** -73.07% (observed minute history)
+- **Current holding-cycle MDD:** -63.10%
+- **Minute-data coverage:** 906/906 (100.00%)
 - **Risk-data quality:** **COMPLETE_CURRENT_CYCLE**
 - **Historical risk intervals:** 12 complete / 0 incomplete
 - **Latest completed risk interval:** COMPLETE
@@ -120,11 +120,11 @@ Sortino remains unavailable until enough daily observations exist; no ratio is i
 
 ## Timestamps and provenance
 
-- **STATUS.md generated:** 2026-11-28 01:33:10 UTC
-- **Paper workflow started:** 2026-11-28 01:30:40 UTC
-- **Latest saved market observation:** 2026-11-28 01:33:06 UTC
+- **STATUS.md generated:** 2026-11-28 09:26:22 UTC
+- **Paper workflow started:** 2026-11-28 09:24:35 UTC
+- **Latest saved market observation:** 2026-11-28 09:26:17 UTC
 - **Workflow trigger:** **schedule / paper**
-- **GitHub Actions run:** [46093441029](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/46093441029)
+- **GitHub Actions run:** [46130323264](https://github.com/takenthatusernameis-collab/CROSS-SECTIONAL-FACTOR-MOMENTUM-STOCKS-VS-MEMES-RELATIVE-PERFORMANCE-QUANTITATIVE-ALGORITHMIC-STRATS/actions/runs/46130323264)
 
 ## Interpretation notes
 
